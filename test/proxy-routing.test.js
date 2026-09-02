@@ -67,7 +67,7 @@ test('publica el dashboard antes de autenticar las rutas de inferencia', async (
   assert.equal(models.status, 401);
 });
 
-test('reenvía sin alterar mensajes multimodales a LM Studio', async (t) => {
+test('reenvía sin alterar mensajes multimodales a Proveedor IA Local', async (t) => {
   let receivedBody;
   const upstream = express();
   upstream.use(express.json({ limit: '20mb' }));
@@ -115,7 +115,7 @@ test('reenvía sin alterar mensajes multimodales a LM Studio', async (t) => {
   assert.deepEqual(receivedBody.messages[0].content, multimodalContent);
 });
 
-test('clasifica streams como bypass y registra la telemetría final de LM Studio', async (t) => {
+test('clasifica streams como bypass y registra la telemetría final de Proveedor IA Local', async (t) => {
   const upstream = express();
   upstream.use(express.json());
   upstream.post('/v1/chat/completions', (_req, res) => {

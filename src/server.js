@@ -36,7 +36,7 @@ const gatewayServer = gatewayApp.listen(config.gatewayPort, config.gatewayHost, 
   console.log(`Gateway: ${config.publicGatewayUrl}/v1`);
   console.log(`Dashboard público: ${config.publicGatewayUrl}/dashboard`);
   console.log(`Chat público: ${config.publicGatewayUrl}/chat`);
-  console.log(`LM Studio: ${config.upstreamBaseUrl}`);
+  console.log(`Proveedor IA Local: ${config.upstreamBaseUrl}`);
 });
 
 const shutdown = async (signal) => {

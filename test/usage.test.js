@@ -9,7 +9,7 @@ test('prioriza los contadores exactos del upstream', () => {
   });
 });
 
-test('estima tokens cuando LM Studio no devuelve usage', () => {
+test('estima tokens cuando Proveedor IA Local no devuelve usage', () => {
   const body = { messages: [{ role: 'user', content: 'Escribe una frase corta' }] };
   const usage = extractUsage({ choices: [{ message: { content: 'Esta es la respuesta.' } }] }, body);
   assert.equal(usage.usageSource, 'estimated');
@@ -34,7 +34,7 @@ test('cuenta el razonamiento emitido antes de la respuesta visible', () => {
   assert.equal(extractOutputText({ type: 'reasoning.delta', content: 'Evaluando' }), 'Evaluando');
 });
 
-test('extrae cached_tokens y rendimiento reportados por LM Studio', () => {
+test('extrae cached_tokens y rendimiento reportados por Proveedor IA Local', () => {
   const telemetry = extractUpstreamTelemetry({
     usage: { prompt_tokens_details: { cached_tokens: 80 } },
     stats: { tokens_per_second: 41.25 }
@@ -50,7 +50,7 @@ test('extrae cached_tokens y rendimiento reportados por LM Studio', () => {
   });
 });
 
-test('estima tokens por segundo sin inventar datos de caché de LM Studio', () => {
+test('estima tokens por segundo sin inventar datos de caché de Proveedor IA Local', () => {
   const telemetry = extractUpstreamTelemetry({}, {
     outputTokens: 20,
     firstTokenAt: 1000,

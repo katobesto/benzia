@@ -128,7 +128,7 @@ function renderOverview() {
     ? '—'
     : `${exactNumber.format(totals.averageTokensPerSecond)} <small>tok/s</small>`;
   $('#metric-throughput-detail').textContent = totals.throughputSamples
-    ? `${exactNumber.format(totals.throughputSamples)} emisiones · ${exactNumber.format(totals.throughputReportedRequests)} LM Studio / ${exactNumber.format(totals.throughputEstimatedRequests)} estimadas`
+    ? `${exactNumber.format(totals.throughputSamples)} emisiones · ${exactNumber.format(totals.throughputReportedRequests)} Proveedor IA Local / ${exactNumber.format(totals.throughputEstimatedRequests)} estimadas`
     : 'sin emisiones medidas en el periodo';
   $('#historical-throughput').textContent = totals.averageTokensPerSecond === null
     ? 'sin histórico todavía'
@@ -145,7 +145,7 @@ function renderOverview() {
   const lmRate = totals.lmCacheHitRate;
   $('#lm-cache-rate').textContent = lmRate === null ? 'No reportado' : `${Math.round(lmRate * 100)}%`;
   $('#lm-cache-detail').textContent = lmRate === null
-    ? 'LM Studio no ha enviado cached_tokens en estas respuestas; no equivale a 0% de caché'
+    ? 'Proveedor IA Local no ha enviado cached_tokens en estas respuestas; no equivale a 0% de caché'
     : `${exactNumber.format(totals.lmCachedInputTokens)} de ${exactNumber.format(totals.lmReportedInputTokens)} tokens de entrada reutilizados`;
   if (pageName === 'dashboard') {
     renderTimeline(timeline);
@@ -353,7 +353,7 @@ $('#settings-form').addEventListener('submit', async (event) => {
     $('#upstream-key').value = ''; message.textContent = 'Configuración guardada correctamente.'; await loadAll();
   } catch (error) { message.textContent = error.message; message.classList.add('error'); }
 });
-$('#test-upstream').addEventListener('click', async () => { const status = await checkUpstream(); toast(status?.online ? `LM Studio responde en ${status.latencyMs} ms · ${status.models.length} modelo(s)` : 'No se puede contactar con LM Studio'); });
+$('#test-upstream').addEventListener('click', async () => { const status = await checkUpstream(); toast(status?.online ? `Proveedor IA Local responde en ${status.latencyMs} ms · ${status.models.length} modelo(s)` : 'No se puede contactar con Proveedor IA Local'); });
 $('#clear-cache').addEventListener('click', async () => { if (!confirm('¿Vaciar todas las respuestas en caché?')) return; const result = await api('/admin/api/cache/clear', { method: 'POST' }); toast(`${result.cleared} entradas eliminadas`); });
 $('#mobile-menu').addEventListener('click', () => $('.sidebar').classList.toggle('open'));
 $('#token-chart').addEventListener('mousemove', showChartTooltip);

@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Gateway multiusuario para LM Studio con claves, cache y panel de observabilidad.",
+  "description": "Gateway multiusuario para Proveedor IA Local con claves, cache y panel de observabilidad.",
   "engines": {
     "node": ">=24.0.0"
   },

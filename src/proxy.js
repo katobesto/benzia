@@ -153,8 +153,8 @@ export function createGatewayApp({ config, store, cache, adminApp, chatApp, live
       const timedOut = controller.signal.aborted;
       const status = timedOut ? 504 : 502;
       const message = timedOut
-        ? 'LM Studio no respondió dentro del tiempo configurado.'
-        : `No se pudo conectar con LM Studio: ${error.message}`;
+        ? 'Proveedor IA Local no respondió dentro del tiempo configurado.'
+        : `No se pudo conectar con Proveedor IA Local: ${error.message}`;
       await store.recordMetric({
         id: requestId, at: new Date().toISOString(), keyId: accessKey.id, path,
         model: body?.model || null, status, latencyMs: Date.now() - startedAt,

@@ -100,7 +100,7 @@ export function createAdminApp({ config, store, cache, liveActivity }) {
         if (!['http:', 'https:'].includes(url.protocol)) throw new Error('invalid protocol');
         patch.upstreamBaseUrl = url.toString().replace(/\/+$/, '');
       } catch {
-        return res.status(400).json({ error: 'La URL de LM Studio no es válida.' });
+        return res.status(400).json({ error: 'La URL de Proveedor IA Local no es válida.' });
       }
     }
     if ('publicGatewayUrl' in req.body) {
