@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Chat privado para probar los modelos servidos por benzIA.">
+  <title>benzIA Chat</title>
+  <link rel="stylesheet" href="/chat/chat.css?v=20260902-4">
+</head>
+<body>
+  <div class="chat-shell" id="chat-shell" aria-hidden="true">
+    <aside class="conversation-rail" id="conversation-rail">
+      <div class="rail-brand">
+        <a href="/chat" class="brand" aria-label="benzIA Chat"><span>b</span><strong>benzIA</strong><small>CHAT</small></a>
+        <button class="icon-button rail-close" id="rail-close" type="button" aria-label="Cerrar conversaciones">×</button>
+      </div>
+      <button class="new-chat-button" id="new-chat" type="button"><span>＋</span>Nueva conversación</button>
+      <div class="history-heading"><span>Tus chats</span><small id="conversation-count">0 locales</small></div>
+      <nav class="conversation-list" id="conversation-list" aria-label="Conversaciones guardadas"></nav>
+      <div class="local-note"><i></i><div><strong>Memoria local</strong><span>El historial sólo vive en este navegador.</span></div></div>
+    </aside>
+
+    <main class="chat-stage">
+      <header class="chat-header">
+        <div class="header-left">
+          <button class="icon-button mobile-rail" id="mobile-rail" type="button" aria-label="Abrir conversaciones">☰</button>
+          <div class="model-control">
+            <label for="model-select">Modelo</label>
+            <select id="model-select" aria-label="Modelo activo"></select>
+          </div>
+        </div>
+        <div class="header-right">
+          <span class="connection-state" id="connection-state"><i></i><span>Conectando</span></span>
+          <span class="identity-pill" id="identity-pill">—</span>
+          <button class="token-button" id="change-token" type="button" aria-label="Cambiar token"><span class="token-label-long">Cambiar token</span><span class="token-label-short">Token</span></button>
+        </div>
+      </header>
+
+      <section class="conversation" id="conversation" aria-live="polite">
+        <div class="welcome" id="welcome">
+          <div class="signal-mark" aria-hidden="true"><span>b</span><i></i><i></i><i></i></div>
+          <p class="eyebrow">Chat privado con benzIA</p>
+          <h1>¿En qué puedo ayudarte?</h1>
+          <p class="welcome-copy">Habla con el modelo cargado en tu servidor. Cada mensaje conserva el contexto de esta conversación.</p>
+          <div class="prompt-grid">
+            <button class="prompt-card" type="button" data-prompt="Explícame un concepto complejo con un ejemplo sencillo."><span>Aprender</span><strong>Explícame un concepto</strong><small>Con un ejemplo sencillo</small></button>
+            <button class="prompt-card" type="button" data-prompt="Ayúdame a diseñar una solución paso a paso para este problema: "><span>Resolver</span><strong>Diseña una solución</strong><small>Paso a paso y con criterio</small></button>
+            <button class="prompt-card" type="button" data-prompt="Revisa este texto y propón una versión más clara: "><span>Escribir</span><strong>Mejora un texto</strong><small>Claridad, tono y estructura</small></button>
+          </div>
+        </div>
+        <div class="message-list" id="message-list"></div>
+      </section>
+
+      <footer class="composer-zone">
+        <form class="composer" id="composer">
+          <div class="attachment-tray hidden" id="attachment-tray" aria-label="Archivos preparados"></div>
+          <textarea id="message-input" rows="1" maxlength="32000" placeholder="Escribe un mensaje…" aria-label="Mensaje" aria-describedby="attachment-help"></textarea>
+          <div class="composer-footer">
+            <div class="composer-tools">
+              <input class="visually-hidden" id="attachment-input" type="file" multiple accept="image/jpeg,image/png,image/webp,image/gif,.pdf,.docx,.txt,.md,.markdown,.csv,.json,.log,.xml,.yaml,.yml">
+              <button class="attach-button" id="attach-button" type="button" aria-label="Adjuntar imágenes o documentos" title="Adjuntar imágenes o documentos"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 11.5 12 20a5 5 0 0 1-7.1-7.1l9-9a3.5 3.5 0 0 1 5 5L9.7 18a2 2 0 1 1-2.8-2.8l8.4-8.4"/></svg></button>
+              <span id="attachment-help"><kbd>Enter</kbd> enviar · arrastra, pega o adjunta archivos</span>
+            </div>
+            <div class="composer-actions">
+              <button class="send-button" id="send-button" type="submit" aria-label="Enviar mensaje"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 4 17 8-17 8 3-7 9-1-9-1-3-7Z"/></svg></button>
+              <button class="stop-button hidden" id="stop-button" type="button" aria-label="Detener respuesta">■</button>
+            </div>
+          </div>
+        </form>
+        <p class="disclaimer">El modelo puede equivocarse. Verifica la información importante.</p>
+      </footer>
+    </main>
+  </div>
+
+  <div class="access-screen" id="access-screen">
+    <form class="access-card" id="access-form">
+      <div class="access-brand"><span>b</span><strong>benzIA</strong><small>CHAT</small></div>
+      <p class="eyebrow">Acceso al modelo</p>
+      <h1>Inicia sesión en benzIA Chat</h1>
+      <p>Introduce una clave de acceso activa creada por el administrador de benzIA.</p>
+      <label for="access-token">Token de acceso</label>
+      <div class="token-field"><input id="access-token" type="password" required autocomplete="off" placeholder="lmg_••••••••••••"><button id="toggle-token" type="button" aria-label="Mostrar token">VER</button></div>
+      <small class="token-help">Usa el secreto completo que se mostró al crear la clave; el prefijo visible en el dashboard no es suficiente.</small>
+      <button class="access-button" type="submit"><span>Entrar al chat</span><b>→</b></button>
+      <p class="access-error" id="access-error" role="alert"></p>
+      <div class="privacy-line"><i></i><span>Conversaciones almacenadas sólo en este dispositivo</span></div>
+    </form>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="/chat/vendor/purify.min.js" defer></script>
+  <script src="/chat/vendor/marked.umd.js" defer></script>
+  <script src="/chat/chat.js?v=20260902-9" defer></script>
+</body>
+</html>

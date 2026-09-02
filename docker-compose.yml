@@ -1,0 +1,19 @@
+services:
+  benzia:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      LM_STUDIO_BASE_URL: http://host.docker.internal:1234
+      ADMIN_HOST: 0.0.0.0
+      DATA_DIR: /app/data
+    ports:
+      - "127.0.0.1:3400:3400"
+      - "3401:3401"
+    volumes:
+      - benzia-data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  benzia-data:
