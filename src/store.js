@@ -60,6 +60,7 @@ export class SqliteStore {
         prefix TEXT NOT NULL,
         token_hash TEXT NOT NULL UNIQUE,
         created_at TEXT NOT NULL,
+        paused_at TEXT,
         revoked_at TEXT,
         last_used_at TEXT
       );
@@ -78,6 +79,8 @@ export class SqliteStore {
       CREATE INDEX IF NOT EXISTS idx_metrics_key_at ON metrics(key_id, at);
       CREATE INDEX IF NOT EXISTS idx_metrics_cache_at ON metrics(cache_status, at);
     `);
+    const accessKeyColumns = new Set(this.db.prepare('PRAGMA table_info(access_keys)').all().map((column) => column.name));
+    if (!accessKeyColumns.has('paused_at')) this.db.exec('ALTER TABLE access_keys ADD COLUMN paused_at TEXT');
     this.prepareStatements();
     await this.migrateLegacyJson();
     this.migrateStoredMetrics();
@@ -91,17 +94,23 @@ export class SqliteStore {
       ON CONFLICT(id) DO UPDATE SET data_json = excluded.data_json
     `);
     this.statements.keysList = this.db.prepare(`
-      SELECT id, name, prefix, created_at AS createdAt, revoked_at AS revokedAt, last_used_at AS lastUsedAt
+      SELECT id, name, prefix, created_at AS createdAt, paused_at AS pausedAt, revoked_at AS revokedAt, last_used_at AS lastUsedAt
       FROM access_keys ORDER BY created_at ASC
     `);
     this.statements.keyByHash = this.db.prepare(`
-      SELECT id, name, prefix, created_at AS createdAt, revoked_at AS revokedAt, last_used_at AS lastUsedAt
-      FROM access_keys WHERE token_hash = ? AND revoked_at IS NULL
+      SELECT id, name, prefix, created_at AS createdAt, paused_at AS pausedAt, revoked_at AS revokedAt, last_used_at AS lastUsedAt
+      FROM access_keys WHERE token_hash = ? AND paused_at IS NULL AND revoked_at IS NULL
+    `);
+    this.statements.keyByHashAnyState = this.db.prepare(`
+      SELECT id, name, prefix, created_at AS createdAt, paused_at AS pausedAt, revoked_at AS revokedAt, last_used_at AS lastUsedAt
+      FROM access_keys WHERE token_hash = ?
     `);
     this.statements.keyInsert = this.db.prepare(`
-      INSERT INTO access_keys (id, name, prefix, token_hash, created_at, revoked_at, last_used_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO access_keys (id, name, prefix, token_hash, created_at, paused_at, revoked_at, last_used_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
+    this.statements.keyPause = this.db.prepare('UPDATE access_keys SET paused_at = ? WHERE id = ? AND revoked_at IS NULL');
+    this.statements.keyResume = this.db.prepare('UPDATE access_keys SET paused_at = NULL WHERE id = ? AND revoked_at IS NULL');
     this.statements.keyRevoke = this.db.prepare('UPDATE access_keys SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL');
     this.statements.keyRename = this.db.prepare('UPDATE access_keys SET name = ? WHERE id = ?');
     this.statements.keyTouch = this.db.prepare('UPDATE access_keys SET last_used_at = ? WHERE id = ?');
@@ -132,7 +141,7 @@ export class SqliteStore {
       for (const key of Array.isArray(parsed.keys) ? parsed.keys : []) {
         this.statements.keyInsert.run(
           key.id, key.name, key.prefix, key.tokenHash,
-          key.createdAt, key.revokedAt || null, key.lastUsedAt || null
+          key.createdAt, key.pausedAt || null, key.revokedAt || null, key.lastUsedAt || null
         );
       }
       for (const rawMetric of Array.isArray(parsed.metrics) ? parsed.metrics : []) {
@@ -218,9 +227,10 @@ export class SqliteStore {
     return this.statements.keysList.all().map((key) => ({ ...key }));
   }
 
-  findKeyByToken(token) {
+  findKeyByToken(token, { includeInactive = false } = {}) {
     if (!token) return null;
-    const key = this.statements.keyByHash.get(hashToken(token));
+    const statement = includeInactive ? this.statements.keyByHashAnyState : this.statements.keyByHash;
+    const key = statement.get(hashToken(token));
     return key ? { ...key } : null;
   }
 
@@ -231,11 +241,20 @@ export class SqliteStore {
       name,
       prefix: token.slice(0, 12),
       createdAt: new Date().toISOString(),
+      pausedAt: null,
       revokedAt: null,
       lastUsedAt: null
     };
-    this.statements.keyInsert.run(key.id, key.name, key.prefix, hashToken(token), key.createdAt, null, null);
+    this.statements.keyInsert.run(key.id, key.name, key.prefix, hashToken(token), key.createdAt, null, null, null);
     return { ...key, token };
+  }
+
+  async setKeyPaused(id, paused) {
+    const result = paused
+      ? this.statements.keyPause.run(new Date().toISOString(), id)
+      : this.statements.keyResume.run(id);
+    if (Number(result.changes) === 0) return null;
+    return this.listKeys().find((key) => key.id === id) || null;
   }
 
   async revokeKey(id) {

@@ -4,10 +4,12 @@ export function extractAccessToken(req) {
   return req.get('x-api-key')?.trim() || '';
 }
 
+export const PAUSED_TOKEN_MESSAGE = 'Su token ha sido deshabilitado por el administrador. Consulte con Benzo para evaluar si se trata de un problema de pago o personal.';
+
 export function accessAuth(store) {
   return (req, res, next) => {
-    const accessKey = store.findKeyByToken(extractAccessToken(req));
-    if (!accessKey) {
+    const accessKey = store.findKeyByToken(extractAccessToken(req), { includeInactive: true });
+    if (!accessKey || accessKey.revokedAt) {
       return res.status(401).json({
         error: {
           message: 'Clave de acceso ausente, revocada o no válida.',

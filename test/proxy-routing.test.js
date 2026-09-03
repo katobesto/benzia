@@ -6,6 +6,7 @@ import test from 'node:test';
 
 import express from 'express';
 
+import { PAUSED_TOKEN_MESSAGE } from '../src/access-auth.js';
 import { adminAuth } from '../src/admin-auth.js';
 import { createGatewayApp } from '../src/proxy.js';
 import { SqliteStore } from '../src/store.js';
@@ -63,6 +64,83 @@ test('publica el dashboard antes de autenticar las rutas de inferencia', async (
 
   const models = await fetch(`http://127.0.0.1:${address.port}/v1/models`);
   assert.equal(models.status, 401);
+});
+
+test('un token pausado consulta modelos y recibe el aviso como respuesta de asistente', async (t) => {
+  let upstreamCalls = 0;
+  const upstream = express();
+  upstream.get('/v1/models', (_req, res) => {
+    upstreamCalls += 1;
+    res.json({ object: 'list', data: [{ id: 'modelo-local', object: 'model' }] });
+  });
+  const upstreamServer = upstream.listen(0, '127.0.0.1');
+  await new Promise((resolve) => upstreamServer.once('listening', resolve));
+  t.after(() => new Promise((resolve) => upstreamServer.close(resolve)));
+
+  const store = {
+    getSettings: () => ({}),
+    findKeyByToken: () => ({
+      id: 'paused-key',
+      name: 'Acceso pausado',
+      pausedAt: new Date().toISOString(),
+      revokedAt: null
+    }),
+    recordMetric: async () => {}
+  };
+  const gateway = createGatewayApp({
+    config: {
+      upstreamBaseUrl: `http://127.0.0.1:${upstreamServer.address().port}`,
+      upstreamApiKey: '',
+      requestTimeoutMs: 5000
+    },
+    store
+  });
+  const gatewayServer = gateway.listen(0, '127.0.0.1');
+  await new Promise((resolve) => gatewayServer.once('listening', resolve));
+  t.after(() => new Promise((resolve) => gatewayServer.close(resolve)));
+  const baseUrl = `http://127.0.0.1:${gatewayServer.address().port}/v1`;
+  const headers = { authorization: 'Bearer paused-token', 'content-type': 'application/json' };
+
+  const models = await fetch(`${baseUrl}/models`, { headers });
+  assert.equal(models.status, 200);
+  assert.equal((await models.json()).data[0].id, 'modelo-local');
+
+  const responsesStream = await fetch(`${baseUrl}/responses`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ model: 'modelo-local', input: 'Hola', stream: true })
+  });
+  assert.equal(responsesStream.status, 200);
+  assert.match(responsesStream.headers.get('content-type'), /text\/event-stream/);
+  const streamBody = await responsesStream.text();
+  assert.match(streamBody, /response\.output_text\.delta/);
+  assert.match(streamBody, new RegExp(PAUSED_TOKEN_MESSAGE.replace(/[.*+?^$\{\}()|[\]\\]/g, '\\$&')));
+
+  const responsesJson = await fetch(`${baseUrl}/responses`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ model: 'modelo-local', input: 'Hola' })
+  });
+  assert.equal(responsesJson.status, 200);
+  assert.equal((await responsesJson.json()).output[0].content[0].text, PAUSED_TOKEN_MESSAGE);
+
+  const chatCompletion = await fetch(`${baseUrl}/chat/completions`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ model: 'modelo-local', messages: [{ role: 'user', content: 'Hola' }] })
+  });
+  assert.equal(chatCompletion.status, 200);
+  assert.equal((await chatCompletion.json()).choices[0].message.content, PAUSED_TOKEN_MESSAGE);
+
+  const chatStream = await fetch(`${baseUrl}/chat/completions`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ model: 'modelo-local', messages: [{ role: 'user', content: 'Hola' }], stream: true })
+  });
+  assert.equal(chatStream.status, 200);
+  assert.match(chatStream.headers.get('content-type'), /text\/event-stream/);
+  assert.match(await chatStream.text(), new RegExp(PAUSED_TOKEN_MESSAGE.replace(/[.*+?^$\{\}()|[\]\\]/g, '\\$&')));
+  assert.equal(upstreamCalls, 1);
 });
 
 test('reenvía sin alterar mensajes multimodales a Proveedor IA Local', async (t) => {

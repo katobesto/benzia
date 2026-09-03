@@ -12,7 +12,11 @@ async function listen(app) {
 test('sirve la interfaz de chat sin exponer su configuración', async (t) => {
   const store = {
     getSettings: () => ({ publicGatewayUrl: 'https://gateway.example.test' }),
-    findKeyByToken: (token) => token === 'valid-user-token' ? { id: 'key-1', name: 'Equipo QA' } : null
+    findKeyByToken: (token) => token === 'valid-user-token'
+      ? { id: 'key-1', name: 'Equipo QA', pausedAt: null, revokedAt: null }
+      : token === 'paused-user-token'
+        ? { id: 'key-2', name: 'Equipo pausado', pausedAt: new Date().toISOString(), revokedAt: null }
+        : null
   };
   const app = createChatApp({ config: { publicGatewayUrl: 'http://localhost:3401' }, store });
   const { server, baseUrl } = await listen(app);
@@ -47,6 +51,13 @@ test('sirve la interfaz de chat sin exponer su configuración', async (t) => {
 
   const rejected = await fetch(`${baseUrl}/api/config`, { headers: { authorization: 'Bearer wrong-token' } });
   assert.equal(rejected.status, 401);
+
+  const paused = await fetch(`${baseUrl}/api/config`, { headers: { authorization: 'Bearer paused-user-token' } });
+  assert.equal(paused.status, 200);
+  assert.deepEqual(await paused.json(), {
+    endpoint: 'https://gateway.example.test/v1',
+    identity: { id: 'key-2', name: 'Equipo pausado' }
+  });
 
   const allowed = await fetch(`${baseUrl}/api/config`, { headers: { authorization: 'Bearer valid-user-token' } });
   assert.equal(allowed.status, 200);

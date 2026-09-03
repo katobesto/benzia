@@ -166,8 +166,14 @@ td strong { color: var(--text); font-size: 11px; }
 td code { color: var(--muted); font: 9px var(--mono); }
 .state-pill, .cache-tag { display: inline-flex; padding: 5px 7px; border-radius: 4px; font: 700 7px var(--mono); letter-spacing: .07em; text-transform: uppercase; }
 .state-pill { color: var(--green); border: 1px solid rgba(77,221,158,.25); background: rgba(77,221,158,.07); }
+.state-pill.paused { color: var(--amber); border-color: rgba(244,185,91,.25); background: rgba(244,185,91,.07); }
 .state-pill.revoked { color: var(--red); border-color: rgba(255,107,107,.25); background: rgba(255,107,107,.06); }
-.row-action { padding: 6px 8px; border: 1px solid rgba(255,107,107,.22); border-radius: 4px; background: none; color: var(--red); font: 700 8px var(--mono); }
+.row-actions { display: flex; justify-content: flex-end; gap: 6px; }
+.row-action { padding: 6px 8px; border: 1px solid var(--border-bright); border-radius: 4px; background: none; color: var(--muted); font: 700 8px var(--mono); white-space: nowrap; }
+.row-action.pause-key { color: var(--amber); border-color: rgba(244,185,91,.22); }
+.row-action.resume-key { color: var(--green); border-color: rgba(77,221,158,.22); }
+.row-action.revoke-key { color: var(--red); border-color: rgba(255,107,107,.22); }
+.row-action:hover { background: rgba(255,255,255,.04); }
 .empty-cell { height: 130px; text-align: center; color: var(--muted-2); font: 10px var(--mono); }
 .activity-head, .activity-row { display: grid; grid-template-columns: 75px minmax(110px,1fr) minmax(180px,1.5fr) 90px 75px 75px 48px; gap: 13px; align-items: center; }
 .activity-head { height: 39px; padding: 0 18px; color: var(--muted-2); background: #0d1218; border-bottom: 1px solid var(--border); font: 700 7px var(--mono); letter-spacing: .08em; text-transform: uppercase; }

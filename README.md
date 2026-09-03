@@ -1,6 +1,6 @@
 # benzIA — gateway multiusuario para Proveedor IA Local
 
-benzIA pone una capa compatible con la API de OpenAI delante del servidor local de Proveedor IA Local. Entrega claves independientes y revocables, contabiliza tokens por identidad, mide latencia y reutilización de contexto del motor, y ofrece un panel web sin enviar prompts ni respuestas a servicios externos.
+benzIA pone una capa compatible con la API de OpenAI delante del servidor local de Proveedor IA Local. Entrega claves independientes, pausables y revocables, contabiliza tokens por identidad, mide latencia y reutilización de contexto del motor, y ofrece un panel web sin enviar prompts ni respuestas a servicios externos.
 
 ## Puesta en marcha
 
@@ -28,6 +28,8 @@ El panel sólo escucha en `127.0.0.1` por defecto. El gateway escucha en todas l
 ## Uso desde un cliente OpenAI
 
 Primero cree una clave con nombre desde el panel. El secreto se muestra una sola vez.
+
+Una clave puede pausarse temporalmente desde **Claves API** y reanudarse conservando el mismo token. La revocación es definitiva. Una clave pausada puede abrir el chat y consultar la lista de modelos, pero sus inferencias no llegan al proveedor: benzIA devuelve una respuesta de asistente compatible, también en streaming, explicando que el administrador ha deshabilitado el acceso. Así el aviso aparece como contestación tanto en el chat como en clientes como OpenCode. Una clave inválida o revocada recibe HTTP `401`.
 
 ```javascript
 import OpenAI from "openai";

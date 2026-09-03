@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
   <title>benzIA Console</title>
-  <link rel="stylesheet" href="/styles.css?v=20260903-1">
+  <link rel="stylesheet" href="/styles.css?v=20260903-2">
 </head>
 <body>
   <div class="app-shell">
@@ -55,9 +55,9 @@
       </section>
 
       <section class="page" data-page="keys">
-        <div class="page-heading"><div><p class="overline">CONTROL DE ACCESO</p><h1>Claves API</h1><p>Crea una identidad por usuario o aplicación y revócala en cualquier momento.</p></div><button class="primary-button" data-open-key-dialog type="button"><span>＋</span> Crear nueva clave</button></div>
+        <div class="page-heading"><div><p class="overline">CONTROL DE ACCESO</p><h1>Claves API</h1><p>Crea una identidad por usuario o aplicación, pausa su acceso o revócala definitivamente.</p></div><button class="primary-button" data-open-key-dialog type="button"><span>＋</span> Crear nueva clave</button></div>
         <div class="info-banner"><span class="info-icon">i</span><div><strong>El secreto se muestra una sola vez</strong><p>benzIA almacena únicamente su hash. Copia el token antes de cerrar el diálogo.</p></div></div>
-        <article class="panel"><div class="panel-header keys-panel-header"><div><h2>Identidades del gateway</h2><p><span id="active-key-count">0</span> claves activas</p></div><button class="secondary-button" data-open-key-dialog type="button">＋ Nueva clave</button></div><div class="table-shell"><table><thead><tr><th>Nombre</th><th>Prefijo</th><th>Creada</th><th>Último uso</th><th>Estado</th><th><span class="sr-only">Acciones</span></th></tr></thead><tbody id="keys-table"><tr><td colspan="6" class="empty-cell">Cargando claves…</td></tr></tbody></table></div></article>
+        <article class="panel"><div class="panel-header keys-panel-header"><div><h2>Identidades del gateway</h2><p><span id="active-key-count">0</span> activas · <span id="paused-key-count">0</span> pausadas</p></div><button class="secondary-button" data-open-key-dialog type="button">＋ Nueva clave</button></div><div class="table-shell"><table><thead><tr><th>Nombre</th><th>Prefijo</th><th>Creada</th><th>Último uso</th><th>Estado</th><th><span class="sr-only">Acciones</span></th></tr></thead><tbody id="keys-table"><tr><td colspan="6" class="empty-cell">Cargando claves…</td></tr></tbody></table></div></article>
       </section>
 
       <section class="page" data-page="activity">
@@ -82,6 +82,6 @@
   <dialog id="key-dialog"><form method="dialog" class="dialog-card" id="key-form"><button class="dialog-close" value="cancel" type="submit" aria-label="Cerrar">×</button><div class="dialog-icon">＋</div><p class="overline">NUEVA CLAVE API</p><h2>Crear identidad</h2><p>Asigna un nombre reconocible al usuario, equipo o aplicación.</p><label>Nombre de la clave<input id="key-name" name="name" maxlength="80" minlength="2" required placeholder="Ej. Equipo de desarrollo"></label><button class="primary-button wide" value="default" type="submit">Generar token</button><p class="form-message error" id="key-message" aria-live="polite"></p></form></dialog>
   <dialog id="token-dialog"><div class="dialog-card token-card"><button class="dialog-close" id="close-token-dialog" type="button" aria-label="Cerrar">×</button><div class="dialog-icon success">✓</div><p class="overline">TOKEN GENERADO</p><h2>Cópialo ahora</h2><p>Por seguridad no volverá a mostrarse.</p><div class="secret-field"><code id="created-token"></code><button id="copy-token" type="button">Copiar</button></div><button class="primary-button wide" id="token-saved" type="button">He guardado el token</button></div></dialog>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
-  <script src="/app.js?v=20260903-1" type="module"></script>
+  <script src="/app.js?v=20260903-2" type="module"></script>
 </body>
 </html>

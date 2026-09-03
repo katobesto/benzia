@@ -4,9 +4,11 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { SqliteStore } from '../src/store.js';
+import { DatabaseSync } from 'node:sqlite';
 
-test('las claves se validan por hash y dejan de funcionar al revocarse', async (t) => {
+import { hashToken, SqliteStore } from '../src/store.js';
+
+test('las claves pueden pausarse, reanudarse y revocarse definitivamente', async (t) => {
   const testDir = await fs.mkdtemp(path.join(os.tmpdir(), 'benzIA-store-'));
   const store = new SqliteStore(testDir, 30);
   t.after(async () => { store.close(); await fs.rm(testDir, { recursive: true, force: true }); });
@@ -15,8 +17,45 @@ test('las claves se validan por hash y dejan de funcionar al revocarse', async (
   assert.ok(created.token.startsWith('lmg_'));
   assert.equal(store.findKeyByToken(created.token).name, 'Pruebas');
   assert.equal(JSON.stringify(store.listKeys()).includes(created.token), false);
+  const paused = await store.setKeyPaused(created.id, true);
+  assert.ok(paused.pausedAt);
+  assert.equal(store.findKeyByToken(created.token), null);
+  assert.ok(store.findKeyByToken(created.token, { includeInactive: true }).pausedAt);
+  const resumed = await store.setKeyPaused(created.id, false);
+  assert.equal(resumed.pausedAt, null);
+  assert.equal(store.findKeyByToken(created.token).name, 'Pruebas');
   await store.revokeKey(created.id);
   assert.equal(store.findKeyByToken(created.token), null);
+  assert.equal(await store.setKeyPaused(created.id, false), null);
+});
+
+test('añade el estado de pausa a una base SQLite existente sin perder claves', async (t) => {
+  const testDir = await fs.mkdtemp(path.join(os.tmpdir(), 'benzIA-store-schema-'));
+  const databasePath = path.join(testDir, 'gateway.sqlite');
+  const legacyDb = new DatabaseSync(databasePath);
+  legacyDb.exec(`
+    CREATE TABLE access_keys (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      prefix TEXT NOT NULL,
+      token_hash TEXT NOT NULL UNIQUE,
+      created_at TEXT NOT NULL,
+      revoked_at TEXT,
+      last_used_at TEXT
+    );
+  `);
+  legacyDb.prepare(`
+    INSERT INTO access_keys (id, name, prefix, token_hash, created_at, revoked_at, last_used_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run('legacy-key', 'Clave existente', 'lmg_legacy', hashToken('legacy-token'), new Date().toISOString(), null, null);
+  legacyDb.close();
+
+  const store = new SqliteStore(testDir, 30);
+  t.after(async () => { store.close(); await fs.rm(testDir, { recursive: true, force: true }); });
+  await store.init();
+  assert.equal(store.listKeys()[0].pausedAt, null);
+  assert.ok((await store.setKeyPaused('legacy-key', true)).pausedAt);
+  assert.equal(store.findKeyByToken('legacy-token'), null);
 });
 
 test('migra los streams históricos de miss a bypass', async (t) => {

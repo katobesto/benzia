@@ -107,7 +107,7 @@ function renderKeyFilter() {
   const selected = select.value;
   select.innerHTML = '<option value="">Todas las claves</option>' + state.keys
     .filter((key) => !key.revokedAt)
-    .map((key) => `<option value="${escapeHtml(key.id)}">${escapeHtml(key.name)}</option>`).join('');
+    .map((key) => `<option value="${escapeHtml(key.id)}">${escapeHtml(key.name)}${key.pausedAt ? ' (pausada)' : ''}</option>`).join('');
   if ([...select.options].some((option) => option.value === selected)) select.value = selected;
 }
 
@@ -244,10 +244,21 @@ function renderKeyBars(items) {
 }
 
 function renderKeys() {
-  $('#active-key-count').textContent = exactNumber.format(state.keys.filter((key) => !key.revokedAt).length);
+  $('#active-key-count').textContent = exactNumber.format(state.keys.filter((key) => !key.revokedAt && !key.pausedAt).length);
+  $('#paused-key-count').textContent = exactNumber.format(state.keys.filter((key) => !key.revokedAt && key.pausedAt).length);
   const table = $('#keys-table');
   if (!state.keys.length) { table.innerHTML = '<tr><td colspan="6" class="empty-cell">No hay claves. Usa “Crear nueva clave” para añadir la primera.</td></tr>'; return; }
-  table.innerHTML = [...state.keys].reverse().map((key) => `<tr><td><strong>${escapeHtml(key.name)}</strong></td><td><code>${escapeHtml(key.prefix)}••••</code></td><td>${dateTime.format(new Date(key.createdAt))}</td><td>${key.lastUsedAt ? dateTime.format(new Date(key.lastUsedAt)) : 'Nunca'}</td><td><span class="state-pill ${key.revokedAt ? 'revoked' : ''}">${key.revokedAt ? 'Revocada' : 'Activa'}</span></td><td>${key.revokedAt ? '' : `<button class="row-action revoke-key" data-id="${escapeHtml(key.id)}" data-name="${escapeHtml(key.name)}" type="button">Revocar</button>`}</td></tr>`).join('');
+  table.innerHTML = [...state.keys].reverse().map((key) => {
+    const stateLabel = key.revokedAt ? 'Revocada' : key.pausedAt ? 'Pausada' : 'Activa';
+    const stateClass = key.revokedAt ? 'revoked' : key.pausedAt ? 'paused' : '';
+    const accessAction = key.pausedAt
+      ? `<button class="row-action resume-key" data-id="${escapeHtml(key.id)}" data-name="${escapeHtml(key.name)}" type="button">Reanudar</button>`
+      : `<button class="row-action pause-key" data-id="${escapeHtml(key.id)}" data-name="${escapeHtml(key.name)}" type="button">Pausar</button>`;
+    const actions = key.revokedAt ? '' : `<div class="row-actions">${accessAction}<button class="row-action revoke-key" data-id="${escapeHtml(key.id)}" data-name="${escapeHtml(key.name)}" type="button">Revocar</button></div>`;
+    return `<tr><td><strong>${escapeHtml(key.name)}</strong></td><td><code>${escapeHtml(key.prefix)}••••</code></td><td>${dateTime.format(new Date(key.createdAt))}</td><td>${key.lastUsedAt ? dateTime.format(new Date(key.lastUsedAt)) : 'Nunca'}</td><td><span class="state-pill ${stateClass}">${stateLabel}</span></td><td>${actions}</td></tr>`;
+  }).join('');
+  table.querySelectorAll('.pause-key').forEach((button) => button.addEventListener('click', () => setKeyPaused(button.dataset.id, button.dataset.name, true)));
+  table.querySelectorAll('.resume-key').forEach((button) => button.addEventListener('click', () => setKeyPaused(button.dataset.id, button.dataset.name, false)));
   table.querySelectorAll('.revoke-key').forEach((button) => button.addEventListener('click', () => revokeKey(button.dataset.id, button.dataset.name)));
 }
 
@@ -304,8 +315,17 @@ async function checkUpstream() {
 }
 
 async function revokeKey(id, name) {
-  if (!confirm(`¿Revocar la clave “${name}”? Dejará de funcionar inmediatamente.`)) return;
+  if (!confirm(`¿Revocar definitivamente la clave “${name}”? No podrá volver a activarse.`)) return;
   try { await api(`/admin/api/keys/${encodeURIComponent(id)}`, { method: 'DELETE' }); toast('Clave revocada'); await loadAll(); } catch (error) { toast(error.message); }
+}
+
+async function setKeyPaused(id, name, paused) {
+  if (paused && !confirm(`¿Pausar la clave “${name}”? Las inferencias recibirán el aviso administrativo hasta reanudarla.`)) return;
+  try {
+    await api(`/admin/api/keys/${encodeURIComponent(id)}/access`, { method: 'PATCH', body: JSON.stringify({ paused }) });
+    toast(paused ? 'Clave pausada' : 'Clave reanudada');
+    await loadAll();
+  } catch (error) { toast(error.message); }
 }
 
 function updateClock() { $('#header-clock').textContent = new Intl.DateTimeFormat('es-ES', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date()); }

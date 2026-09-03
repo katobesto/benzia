@@ -71,6 +71,13 @@ export function createAdminApp({ config, store, liveActivity }) {
     res.json({ key });
   });
 
+  app.patch('/admin/api/keys/:id/access', auth, async (req, res) => {
+    if (typeof req.body?.paused !== 'boolean') return res.status(400).json({ error: 'El estado de pausa debe ser verdadero o falso.' });
+    const key = await store.setKeyPaused(req.params.id, req.body.paused);
+    if (!key) return res.status(404).json({ error: 'Clave no encontrada o revocada.' });
+    res.json({ key });
+  });
+
   app.delete('/admin/api/keys/:id', auth, async (req, res) => {
     const revoked = await store.revokeKey(req.params.id);
     if (!revoked) return res.status(404).json({ error: 'Clave no encontrada.' });
