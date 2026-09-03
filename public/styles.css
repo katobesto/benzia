@@ -177,9 +177,9 @@ td code { color: var(--muted); font: 9px var(--mono); }
 .activity-tokens small, .activity-latency small { display: block; margin-top: 4px; color: var(--cyan); font-size: 7px; }
 .activity-name { color: var(--text); font-weight: 650; }
 .cache-tag { width: max-content; color: var(--muted); background: var(--surface-3); }
-.cache-tag.hit { color: var(--cyan); background: var(--cyan-dim); }
-.cache-tag.miss { color: var(--amber); background: rgba(244,185,91,.08); }
-.cache-tag.bypass { color: var(--muted); background: var(--surface-3); }
+.cache-tag.reused { color: var(--cyan); background: var(--cyan-dim); }
+.cache-tag.processed { color: var(--amber); background: rgba(244,185,91,.08); }
+.cache-tag.unavailable { color: var(--muted); background: var(--surface-3); }
 .http-status { color: var(--green); font: 8px var(--mono); }
 .http-status.error { color: var(--red); }
 .settings-layout { display: grid; grid-template-columns: minmax(0,1.35fr) minmax(260px,.65fr); gap: 14px; }

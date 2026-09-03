@@ -1,6 +1,6 @@
 # benzIA — gateway multiusuario para Proveedor IA Local
 
-benzIA pone una capa compatible con la API de OpenAI delante del servidor local de Proveedor IA Local. Entrega claves independientes y revocables, contabiliza tokens por identidad, mide latencia y aciertos de caché, y ofrece un panel web sin enviar prompts ni respuestas a servicios externos.
+benzIA pone una capa compatible con la API de OpenAI delante del servidor local de Proveedor IA Local. Entrega claves independientes y revocables, contabiliza tokens por identidad, mide latencia y reutilización de contexto del motor, y ofrece un panel web sin enviar prompts ni respuestas a servicios externos.
 
 ## Puesta en marcha
 
@@ -47,7 +47,7 @@ También se admite `x-api-key`. Todas las rutas `/v1/*` se reenvían a Proveedor
 
 ## Chat web para usuarios
 
-`/chat` ofrece una interfaz de conversación para probar los modelos cargados en Proveedor IA Local. Cada usuario debe introducir una clave activa creada en **Claves API**. La pantalla valida esa clave antes de consultar `/v1/models` y cada respuesta se solicita a `/v1/chat/completions` usando el endpoint público configurado en el dashboard.
+`/chat` ofrece una interfaz de conversación para probar los modelos cargados en Proveedor IA Local. Cada usuario debe introducir una clave activa creada en **Claves API**. La pantalla valida esa clave antes de consultar `/v1/models` y cada respuesta se solicita a `/v1/responses` usando el endpoint público configurado en el dashboard.
 
 Las conversaciones y el modelo seleccionado se conservan en `localStorage` del navegador; el token sólo permanece en `sessionStorage` hasta cerrar la pestaña. En cada turno se reenvía el historial de la conversación activa para conservar el contexto. El servidor mantiene su política de privacidad: no persiste mensajes ni respuestas, únicamente las métricas de uso ya descritas.
 
@@ -59,20 +59,20 @@ El compositor permite adjuntar hasta cuatro archivos mediante el selector, arras
 
 La extracción usa el endpoint protegido `POST /chat/api/attachments/extract`, por lo que también exige una clave de usuario activa. El navegador reduce cada imagen a un máximo de 1,3 MB antes de almacenarla y enviarla. Si `localStorage` se llena, la interfaz avisa para que se eliminen chats antiguos.
 
-## Métricas y caché
+## Métricas y caché del proveedor
 
 - Cuando Proveedor IA Local entrega `usage`, benzIA conserva sus contadores exactos.
 - Si no entrega `usage`, se usa una estimación y la traza queda marcada internamente como `estimated`.
 - En streaming se solicita `stream_options.include_usage`, se reenvía el SSE sin esperar a que termine y se registra el bloque final de uso/estadísticas.
-- La caché sólo se aplica a inferencias `POST` no streaming exitosas. Su clave es el hash de la ruta y del cuerpo completo.
-- `HIT` y `MISS` describen exclusivamente la caché de respuestas de benzIA. Los streams, las rutas no cacheables, la caché desactivada y `Cache-Control: no-cache` se registran como `BYPASS`.
-- La caché de prompt/KV de Proveedor IA Local se contabiliza aparte cuando el upstream devuelve `cached_tokens` (por ejemplo, en `/v1/responses`). Si el endpoint no lo incluye, el panel lo indica como no reportado.
+- benzIA no almacena respuestas ni implementa una caché propia: cada petición autenticada llega al proveedor configurado.
+- La caché de prompt/KV del proveedor se contabiliza cuando el upstream devuelve `usage.input_tokens_details.cached_tokens` o un campo compatible. Si el endpoint no lo incluye, el panel lo indica como **no reportado**, que no equivale a un 0 % de reutilización.
+- El dashboard muestra tokens de entrada reutilizados, tokens procesados (`input_tokens - cached_tokens`) y el porcentaje de reutilización. Esta métrica es proporcional por tokens, no un estado binario `HIT`/`MISS` por petición.
 - Durante una respuesta en streaming, el dashboard muestra el estado de emisión y una velocidad aproximada. Al terminar se conserva `tokens_per_second` si Proveedor IA Local lo reporta; en caso contrario se calcula con los tokens de salida y el tiempo de generación observado.
 - Las mediciones estimadas antiguas se recalculan de forma conservadora usando la duración completa de la petición; las nuevas incluyen también los fragmentos de razonamiento para no inflar la velocidad.
-- La caché vive en memoria. Las métricas, claves y ajustes persisten en `data/gateway.sqlite`, con SQLite en modo WAL e índices por fecha, clave y estado de caché.
+- Las métricas, claves y ajustes persisten en `data/gateway.sqlite`, con SQLite en modo WAL e índices de consulta.
 - Al arrancar por primera vez con SQLite, benzIA importa automáticamente el antiguo `gateway.json` y conserva una copia `gateway.json.migrated` como respaldo.
 
-No se guardan prompts, mensajes, embeddings ni respuestas. Cada métrica contiene identidad, endpoint, modelo, fecha, estado, latencia, tokens, rendimiento y estados de caché.
+No se guardan prompts, mensajes, embeddings ni respuestas. Cada métrica contiene identidad, endpoint, modelo, fecha, estado, latencia, tokens, rendimiento y, cuando el proveedor lo informa, los tokens de entrada reutilizados por su caché.
 
 ## Puertos y configuración
 
@@ -84,8 +84,6 @@ No se guardan prompts, mensajes, embeddings ni respuestas. Cada métrica contien
 | `GATEWAY_PORT` | `3401` | Puerto compatible con OpenAI |
 | `PUBLIC_GATEWAY_URL` | `http://localhost:3401` | URL mostrada en el panel |
 | `LM_STUDIO_BASE_URL` | `http://127.0.0.1:1234` | Servidor de Proveedor IA Local |
-| `CACHE_TTL_SECONDS` | `300` | Caducidad de respuestas |
-| `CACHE_MAX_ENTRIES` | `250` | Máximo LRU en memoria |
 | `METRICS_RETENTION_DAYS` | `30` | Retención de telemetría |
 | `REQUEST_TIMEOUT_MS` | `300000` | Timeout de inferencia |
 

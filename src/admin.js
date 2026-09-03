@@ -11,7 +11,7 @@ const publicDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 
 const validName = (value) => typeof value === 'string' && value.trim().length >= 2 && value.trim().length <= 80;
 
-export function createAdminApp({ config, store, cache, liveActivity }) {
+export function createAdminApp({ config, store, liveActivity }) {
   const app = express();
   app.disable('x-powered-by');
   app.use(helmet({ contentSecurityPolicy: { directives: { 'script-src': ["'self'"], 'style-src': ["'self'"], 'img-src': ["'self'", 'data:'] } } }));
@@ -86,7 +86,6 @@ export function createAdminApp({ config, store, cache, liveActivity }) {
       gatewayPort: config.gatewayPort,
       adminPort: config.adminPort,
       publicGatewayUrl: settings.publicGatewayUrl || config.publicGatewayUrl,
-      cache: cache.stats(),
       storage: store.storageStats?.() || null,
       retentionDays: config.metricsRetentionDays
     });
@@ -117,8 +116,6 @@ export function createAdminApp({ config, store, cache, liveActivity }) {
     await store.updateSettings(patch);
     res.json({ updated: true });
   });
-
-  app.post('/admin/api/cache/clear', auth, (_req, res) => res.json({ cleared: cache.clear() }));
 
   app.get('/admin/api/upstream/status', auth, async (_req, res) => {
     const stored = store.getSettings();

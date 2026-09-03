@@ -1,7 +1,6 @@
 import 'dotenv/config';
 
 import { createAdminApp } from './admin.js';
-import { ResponseCache } from './cache.js';
 import { createChatApp } from './chat.js';
 import { loadConfig } from './config.js';
 import { createGatewayApp } from './proxy.js';
@@ -17,12 +16,11 @@ if (config.adminPort === config.gatewayPort) {
 
 const store = new SqliteStore(config.dataDir, config.metricsRetentionDays);
 await store.init();
-const cache = new ResponseCache({ ttlSeconds: config.cacheTtlSeconds, maxEntries: config.cacheMaxEntries });
 const liveActivity = new LiveActivity();
 
-const adminApp = createAdminApp({ config, store, cache, liveActivity });
+const adminApp = createAdminApp({ config, store, liveActivity });
 const chatApp = createChatApp({ config, store });
-const gatewayApp = createGatewayApp({ config, store, cache, adminApp, chatApp, liveActivity });
+const gatewayApp = createGatewayApp({ config, store, adminApp, chatApp, liveActivity });
 
 const adminServer = adminApp.listen(config.adminPort, config.adminHost, () => {
   console.log(`Panel:   http://localhost:${config.adminPort}`);

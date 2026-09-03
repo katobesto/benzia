@@ -7,10 +7,8 @@ export function summarizeMetrics(metrics, keys, bucket = 'hour') {
     requests: 0,
     inputTokens: 0,
     outputTokens: 0,
-    cacheHits: 0,
-    cacheMisses: 0,
-    cacheBypasses: 0,
     lmCachedInputTokens: 0,
+    lmUncachedInputTokens: 0,
     lmReportedInputTokens: 0,
     lmCacheReportedRequests: 0,
     throughputSamples: 0,
@@ -30,12 +28,10 @@ export function summarizeMetrics(metrics, keys, bucket = 'hour') {
     totals.requests += 1;
     totals.inputTokens += metric.inputTokens || 0;
     totals.outputTokens += metric.outputTokens || 0;
-    totals.cacheHits += metric.cacheStatus === 'hit' ? 1 : 0;
-    totals.cacheMisses += metric.cacheStatus === 'miss' ? 1 : 0;
-    totals.cacheBypasses += metric.cacheStatus === 'bypass' ? 1 : 0;
     if (Number.isFinite(metric.lmCachedInputTokens)) {
       totals.lmCachedInputTokens += metric.lmCachedInputTokens;
       totals.lmReportedInputTokens += metric.inputTokens || 0;
+      totals.lmUncachedInputTokens += Math.max(0, (metric.inputTokens || 0) - metric.lmCachedInputTokens);
       totals.lmCacheReportedRequests += 1;
     }
     totals.errors += metric.status >= 400 ? 1 : 0;
@@ -59,23 +55,21 @@ export function summarizeMetrics(metrics, keys, bucket = 'hour') {
       requests: 0,
       inputTokens: 0,
       outputTokens: 0,
-      cacheHits: 0,
-      cacheMisses: 0,
-      cacheBypasses: 0,
       lmCachedInputTokens: 0,
+      lmUncachedInputTokens: 0,
       lmReportedInputTokens: 0,
+      lmCacheReportedRequests: 0,
       errors: 0,
       lastActivity: null
     };
     currentKey.requests += 1;
     currentKey.inputTokens += metric.inputTokens || 0;
     currentKey.outputTokens += metric.outputTokens || 0;
-    currentKey.cacheHits += metric.cacheStatus === 'hit' ? 1 : 0;
-    currentKey.cacheMisses += metric.cacheStatus === 'miss' ? 1 : 0;
-    currentKey.cacheBypasses += metric.cacheStatus === 'bypass' ? 1 : 0;
     if (Number.isFinite(metric.lmCachedInputTokens)) {
       currentKey.lmCachedInputTokens += metric.lmCachedInputTokens;
       currentKey.lmReportedInputTokens += metric.inputTokens || 0;
+      currentKey.lmUncachedInputTokens += Math.max(0, (metric.inputTokens || 0) - metric.lmCachedInputTokens);
+      currentKey.lmCacheReportedRequests += 1;
     }
     currentKey.errors += metric.status >= 400 ? 1 : 0;
     currentKey.lastActivity = metric.at;
@@ -85,23 +79,18 @@ export function summarizeMetrics(metrics, keys, bucket = 'hour') {
     if (safeBucket === 'hour') date.setUTCMinutes(0, 0, 0);
     else date.setUTCHours(0, 0, 0, 0);
     const bucketKey = date.toISOString();
-    const point = timeline.get(bucketKey) || { at: bucketKey, inputTokens: 0, outputTokens: 0, requests: 0, cacheHits: 0, cacheMisses: 0, cacheBypasses: 0, lmCachedInputTokens: 0 };
+    const point = timeline.get(bucketKey) || { at: bucketKey, inputTokens: 0, outputTokens: 0, requests: 0, lmCachedInputTokens: 0, lmReportedInputTokens: 0 };
     point.inputTokens += metric.inputTokens || 0;
     point.outputTokens += metric.outputTokens || 0;
     point.requests += 1;
-    point.cacheHits += metric.cacheStatus === 'hit' ? 1 : 0;
-    point.cacheMisses += metric.cacheStatus === 'miss' ? 1 : 0;
-    point.cacheBypasses += metric.cacheStatus === 'bypass' ? 1 : 0;
     point.lmCachedInputTokens += Number.isFinite(metric.lmCachedInputTokens) ? metric.lmCachedInputTokens : 0;
+    point.lmReportedInputTokens += Number.isFinite(metric.lmCachedInputTokens) ? metric.inputTokens || 0 : 0;
     timeline.set(bucketKey, point);
   }
 
   totals.averageLatencyMs = latencyValues.length
     ? Math.round(latencyValues.reduce((sum, value) => sum + value, 0) / latencyValues.length)
     : 0;
-  totals.cacheHitRate = totals.cacheHits + totals.cacheMisses
-    ? totals.cacheHits / (totals.cacheHits + totals.cacheMisses)
-    : null;
   totals.lmCacheHitRate = totals.lmReportedInputTokens
     ? totals.lmCachedInputTokens / totals.lmReportedInputTokens
     : null;

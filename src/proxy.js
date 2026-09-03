@@ -6,7 +6,7 @@ import express from 'express';
 import { extractAccessToken } from './access-auth.js';
 import { extractOutputText, extractUpstreamTelemetry, extractUsage } from './usage.js';
 
-const CACHEABLE_PATHS = new Set(['/v1/chat/completions', '/v1/completions', '/v1/responses', '/v1/embeddings']);
+const INFERENCE_PATHS = new Set(['/v1/chat/completions', '/v1/completions', '/v1/responses', '/v1/embeddings']);
 const DASHBOARD_PATHS = new Set(['/dashboard', '/keys', '/activity', '/settings', '/styles.css', '/app.js', '/favicon.ico']);
 
 const safeError = (status, message, type = 'gateway_error') => ({
@@ -34,7 +34,7 @@ function parseSseBuffer(buffer, onPayload) {
   return remainder;
 }
 
-export function createGatewayApp({ config, store, cache, adminApp, chatApp, liveActivity }) {
+export function createGatewayApp({ config, store, adminApp, chatApp, liveActivity }) {
   const app = express();
   app.disable('x-powered-by');
   app.use(cors({ origin: true, credentials: false }));
@@ -77,42 +77,7 @@ export function createGatewayApp({ config, store, cache, adminApp, chatApp, live
     const path = req.path;
     const body = req.body && Object.keys(req.body).length ? structuredClone(req.body) : undefined;
     const isStream = Boolean(body?.stream);
-    const isInference = req.method === 'POST' && CACHEABLE_PATHS.has(path);
-    const canCache = isInference && !isStream && cache.stats().maxEntries > 0 && cache.stats().ttlSeconds > 0;
-    const cacheKey = canCache ? cache.keyFor(path, body) : null;
-    const bypassRequested = /no-cache/i.test(req.get('cache-control') || '') || req.query.cache === 'false';
-    const cacheStatus = isInference && canCache && !bypassRequested ? 'miss' : 'bypass';
-
-    if (canCache && !bypassRequested) {
-      const cached = cache.get(cacheKey);
-      if (cached) {
-        const latencyMs = Date.now() - startedAt;
-        res.set({ ...cached.headers, 'x-lm-gateway-cache': 'HIT', 'x-lm-gateway-request-id': requestId });
-        res.status(cached.status).send(Buffer.from(cached.body, 'base64'));
-        await store.recordMetric({
-          id: requestId,
-          at: new Date().toISOString(),
-          keyId: accessKey.id,
-          path,
-          model: body?.model || null,
-          status: cached.status,
-          latencyMs,
-          inputTokens: cached.usage.inputTokens,
-          outputTokens: cached.usage.outputTokens,
-          usageSource: cached.usage.usageSource,
-          lmCachedInputTokens: null,
-          lmCacheSource: 'not_applicable',
-          tokensPerSecond: null,
-          throughputSource: 'not_applicable',
-          telemetryVersion: 2,
-          generationDurationMs: null,
-          timeToFirstTokenMs: null,
-          cacheStatus: 'hit',
-          stream: false
-        });
-        return;
-      }
-    }
+    const isInference = req.method === 'POST' && INFERENCE_PATHS.has(path);
 
     const settings = effectiveSettings();
     const upstreamUrl = `${settings.upstreamBaseUrl}${req.originalUrl}`;
@@ -163,7 +128,7 @@ export function createGatewayApp({ config, store, cache, adminApp, chatApp, live
         tokensPerSecond: null, throughputSource: 'unavailable',
         telemetryVersion: 2,
         generationDurationMs: null, timeToFirstTokenMs: null,
-        cacheStatus, stream: isStream
+        stream: isStream
       });
       return res.status(status).json(safeError(status, message, timedOut ? 'upstream_timeout' : 'upstream_unavailable'));
     }
@@ -171,7 +136,7 @@ export function createGatewayApp({ config, store, cache, adminApp, chatApp, live
     clearTimeout(timeout);
     const responseHeaders = pickResponseHeaders(upstream.headers);
     res.status(upstream.status);
-    res.set({ ...responseHeaders, 'x-lm-gateway-cache': cacheStatus.toUpperCase(), 'x-lm-gateway-request-id': requestId });
+    res.set({ ...responseHeaders, 'x-lm-gateway-request-id': requestId });
 
     if (isStream && upstream.body) {
       res.removeHeader('content-length');
@@ -222,7 +187,7 @@ export function createGatewayApp({ config, store, cache, adminApp, chatApp, live
       await store.recordMetric({
         id: requestId, at: new Date().toISOString(), keyId: accessKey.id, path,
         model: body?.model || null, status: upstream.status, latencyMs: completedAt - startedAt,
-        ...usage, ...telemetry, cacheStatus, stream: true
+        ...usage, ...telemetry, stream: true
       });
       return;
     }
@@ -237,19 +202,11 @@ export function createGatewayApp({ config, store, cache, adminApp, chatApp, live
       startedAt,
       completedAt: Date.now()
     });
-    if (canCache && !bypassRequested && upstream.ok) {
-      cache.set(cacheKey, {
-        status: upstream.status,
-        headers: responseHeaders,
-        body: responseBuffer.toString('base64'),
-        usage
-      });
-    }
     res.send(responseBuffer);
     await store.recordMetric({
       id: requestId, at: new Date().toISOString(), keyId: accessKey.id, path,
       model: body?.model || null, status: upstream.status, latencyMs: Date.now() - startedAt,
-      ...usage, ...telemetry, cacheStatus, stream: false
+      ...usage, ...telemetry, stream: false
     });
   });
 

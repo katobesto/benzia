@@ -118,11 +118,13 @@ function renderOverview() {
   $('#metric-output').textContent = compactNumber.format(totals.outputTokens);
   $('#metric-requests').textContent = exactNumber.format(totals.requests);
   $('#metric-errors').textContent = exactNumber.format(totals.errors);
-  const cacheRate = totals.cacheHitRate;
-  $('#metric-hit-rate').textContent = cacheRate === null ? '—' : `${Math.round(cacheRate * 100)}%`;
-  $('#metric-hits').textContent = exactNumber.format(totals.cacheHits);
-  $('#metric-misses').textContent = exactNumber.format(totals.cacheMisses);
-  $('#metric-bypasses').textContent = exactNumber.format(totals.cacheBypasses || 0);
+  const lmRate = totals.lmCacheHitRate;
+  const lmUncachedInputTokens = Number.isFinite(totals.lmUncachedInputTokens)
+    ? totals.lmUncachedInputTokens
+    : Math.max(0, totals.lmReportedInputTokens - totals.lmCachedInputTokens);
+  $('#metric-lm-cache-rate').textContent = lmRate === null ? '—' : `${Math.round(lmRate * 100)}%`;
+  $('#metric-lm-cached').textContent = compactNumber.format(totals.lmCachedInputTokens);
+  $('#metric-lm-uncached').textContent = compactNumber.format(lmUncachedInputTokens);
   $('#metric-latency').innerHTML = `${exactNumber.format(totals.averageLatencyMs)} <small>ms</small>`;
   $('#metric-throughput').innerHTML = totals.averageTokensPerSecond === null
     ? '—'
@@ -133,20 +135,14 @@ function renderOverview() {
   $('#historical-throughput').textContent = totals.averageTokensPerSecond === null
     ? 'sin histórico todavía'
     : `media del periodo ${exactNumber.format(totals.averageTokensPerSecond)} tok/s`;
-  $('#donut-rate').textContent = cacheRate === null ? '—' : `${Math.round(cacheRate * 100)}%`;
-  $('#donut-hits').textContent = exactNumber.format(totals.cacheHits);
-  $('#donut-misses').textContent = exactNumber.format(totals.cacheMisses);
-  $('#donut-bypasses').textContent = exactNumber.format(totals.cacheBypasses || 0);
-  $('#cache-donut').style.background = `conic-gradient(var(--cyan) ${(cacheRate || 0) * 360}deg, var(--surface-3) 0)`;
-  const eligibleCacheRequests = totals.cacheHits + totals.cacheMisses;
-  $('#response-cache-note').textContent = eligibleCacheRequests
-    ? `${exactNumber.format(eligibleCacheRequests)} peticiones cacheables evaluadas en el periodo`
-    : `${exactNumber.format(totals.cacheBypasses || 0)} peticiones omitieron la caché de respuesta, normalmente por usar streaming`;
-  const lmRate = totals.lmCacheHitRate;
   $('#lm-cache-rate').textContent = lmRate === null ? 'No reportado' : `${Math.round(lmRate * 100)}%`;
-  $('#lm-cache-detail').textContent = lmRate === null
-    ? 'Proveedor IA Local no ha enviado cached_tokens en estas respuestas; no equivale a 0% de caché'
-    : `${exactNumber.format(totals.lmCachedInputTokens)} de ${exactNumber.format(totals.lmReportedInputTokens)} tokens de entrada reutilizados`;
+  $('#lm-cache-cached').textContent = compactNumber.format(totals.lmCachedInputTokens);
+  $('#lm-cache-uncached').textContent = compactNumber.format(lmUncachedInputTokens);
+  $('#lm-cache-reports').textContent = exactNumber.format(totals.lmCacheReportedRequests);
+  $('#lm-cache-donut').style.background = `conic-gradient(var(--cyan) ${(lmRate || 0) * 360}deg, var(--surface-3) 0)`;
+  $('#lm-cache-note').textContent = lmRate === null
+    ? 'El proveedor no ha enviado cached_tokens en este periodo; no equivale a un 0 % de reutilización'
+    : `${exactNumber.format(totals.lmCachedInputTokens)} de ${exactNumber.format(totals.lmReportedInputTokens)} tokens de entrada fueron reutilizados por el motor`;
   if (pageName === 'dashboard') {
     renderTimeline(timeline);
     renderKeyBars(byKey);
@@ -260,9 +256,12 @@ function renderActivity(items = []) {
   const container = $('#activity-list');
   if (!items.length) { container.innerHTML = '<div class="empty-state">No hay solicitudes registradas en este periodo</div>'; return; }
   container.innerHTML = items.map((item) => {
-    const cachedPrompt = Number.isFinite(item.lmCachedInputTokens) ? `<small>KV ${compactNumber.format(item.lmCachedInputTokens)}</small>` : '';
+    const hasLmCache = Number.isFinite(item.lmCachedInputTokens);
+    const lmCacheRate = hasLmCache && item.inputTokens > 0 ? item.lmCachedInputTokens / item.inputTokens : null;
+    const cacheLabel = hasLmCache ? `${Math.round((lmCacheRate || 0) * 100)}% · ${compactNumber.format(item.lmCachedInputTokens)}` : 'No reportado';
+    const cacheClass = !hasLmCache ? 'unavailable' : item.lmCachedInputTokens > 0 ? 'reused' : 'processed';
     const throughput = Number.isFinite(item.tokensPerSecond) ? `<small>${exactNumber.format(item.tokensPerSecond)} tok/s${item.throughputSource === 'estimated' ? ' ≈' : ''}</small>` : '';
-    return `<div class="activity-row"><span class="activity-time">${timeOnly.format(new Date(item.at))}</span><span class="activity-name">${escapeHtml(keys.get(item.keyId) || 'Clave eliminada')}</span><span class="activity-path">${escapeHtml(item.path)}${item.model ? ` · ${escapeHtml(item.model)}` : ''}</span><span class="activity-tokens">↓${compactNumber.format(item.inputTokens)} ↑${compactNumber.format(item.outputTokens)}${cachedPrompt}</span><span class="cache-tag ${escapeHtml(item.cacheStatus)}">${escapeHtml(item.cacheStatus)}</span><span class="activity-latency">${exactNumber.format(item.latencyMs)} ms${throughput}</span><span class="http-status ${item.status >= 400 ? 'error' : ''}">${item.status}</span></div>`;
+    return `<div class="activity-row"><span class="activity-time">${timeOnly.format(new Date(item.at))}</span><span class="activity-name">${escapeHtml(keys.get(item.keyId) || 'Clave eliminada')}</span><span class="activity-path">${escapeHtml(item.path)}${item.model ? ` · ${escapeHtml(item.model)}` : ''}</span><span class="activity-tokens">↓${compactNumber.format(item.inputTokens)} ↑${compactNumber.format(item.outputTokens)}</span><span class="cache-tag ${cacheClass}">${cacheLabel}</span><span class="activity-latency">${exactNumber.format(item.latencyMs)} ms${throughput}</span><span class="http-status ${item.status >= 400 ? 'error' : ''}">${item.status}</span></div>`;
   }).join('');
 }
 
@@ -274,7 +273,6 @@ function renderSettings() {
   updateEndpointPreview();
   $('#gateway-port').textContent = settings.gatewayPort;
   $('#admin-port').textContent = settings.adminPort;
-  $('#cache-settings').textContent = `${settings.cache.ttlSeconds}s / ${settings.cache.maxEntries} entradas`;
   $('#storage-settings').textContent = settings.storage
     ? `${settings.storage.engine} ${settings.storage.journalMode} · ${compactNumber.format(settings.storage.metrics)} métricas`
     : 'No disponible';
@@ -354,7 +352,6 @@ $('#settings-form').addEventListener('submit', async (event) => {
   } catch (error) { message.textContent = error.message; message.classList.add('error'); }
 });
 $('#test-upstream').addEventListener('click', async () => { const status = await checkUpstream(); toast(status?.online ? `Proveedor IA Local responde en ${status.latencyMs} ms · ${status.models.length} modelo(s)` : 'No se puede contactar con Proveedor IA Local'); });
-$('#clear-cache').addEventListener('click', async () => { if (!confirm('¿Vaciar todas las respuestas en caché?')) return; const result = await api('/admin/api/cache/clear', { method: 'POST' }); toast(`${result.cleared} entradas eliminadas`); });
 $('#mobile-menu').addEventListener('click', () => $('.sidebar').classList.toggle('open'));
 $('#token-chart').addEventListener('mousemove', showChartTooltip);
 $('#token-chart').addEventListener('mouseleave', hideChartTooltip);

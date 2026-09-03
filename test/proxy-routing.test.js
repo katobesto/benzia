@@ -7,7 +7,6 @@ import test from 'node:test';
 import express from 'express';
 
 import { adminAuth } from '../src/admin-auth.js';
-import { ResponseCache } from '../src/cache.js';
 import { createGatewayApp } from '../src/proxy.js';
 import { SqliteStore } from '../src/store.js';
 
@@ -30,7 +29,6 @@ test('publica el dashboard antes de autenticar las rutas de inferencia', async (
   const app = createGatewayApp({
     config,
     store,
-    cache: new ResponseCache({ ttlSeconds: 60, maxEntries: 2 }),
     adminApp,
     chatApp
   });
@@ -94,8 +92,7 @@ test('reenvía sin alterar mensajes multimodales a Proveedor IA Local', async (t
   };
   const gateway = createGatewayApp({
     config,
-    store,
-    cache: new ResponseCache({ ttlSeconds: 0, maxEntries: 0 })
+    store
   });
   const gatewayServer = gateway.listen(0, '127.0.0.1');
   await new Promise((resolve) => gatewayServer.once('listening', resolve));
@@ -115,7 +112,7 @@ test('reenvía sin alterar mensajes multimodales a Proveedor IA Local', async (t
   assert.deepEqual(receivedBody.messages[0].content, multimodalContent);
 });
 
-test('clasifica streams como bypass y registra la telemetría final de Proveedor IA Local', async (t) => {
+test('registra la telemetría final del proveedor en streaming', async (t) => {
   const upstream = express();
   upstream.use(express.json());
   upstream.post('/v1/chat/completions', (_req, res) => {
@@ -136,8 +133,7 @@ test('clasifica streams como bypass y registra la telemetría final de Proveedor
   };
   const gateway = createGatewayApp({
     config: { upstreamBaseUrl: `http://127.0.0.1:${upstreamServer.address().port}`, upstreamApiKey: '', requestTimeoutMs: 5000 },
-    store,
-    cache: new ResponseCache({ ttlSeconds: 60, maxEntries: 10 })
+    store
   });
   const gatewayServer = gateway.listen(0, '127.0.0.1');
   await new Promise((resolve) => gatewayServer.once('listening', resolve));
@@ -149,58 +145,13 @@ test('clasifica streams como bypass y registra la telemetría final de Proveedor
     body: JSON.stringify({ model: 'modelo', stream: true, messages: [{ role: 'user', content: 'Hola' }] })
   });
   await response.text();
-  assert.equal(response.headers.get('x-lm-gateway-cache'), 'BYPASS');
-  assert.equal(metrics[0].cacheStatus, 'bypass');
+  assert.equal(response.headers.get('x-lm-gateway-cache'), null);
   assert.equal(metrics[0].lmCachedInputTokens, 8);
   assert.equal(metrics[0].tokensPerSecond, 42);
   assert.equal(metrics[0].throughputSource, 'upstream');
 });
 
-test('distingue miss, hit y bypass en la caché de respuestas', async (t) => {
-  let upstreamCalls = 0;
-  const upstream = express();
-  upstream.use(express.json());
-  upstream.post('/v1/chat/completions', (_req, res) => {
-    upstreamCalls += 1;
-    res.json({ choices: [{ message: { content: 'Respuesta' } }], usage: { prompt_tokens: 4, completion_tokens: 2 } });
-  });
-  const upstreamServer = upstream.listen(0, '127.0.0.1');
-  await new Promise((resolve) => upstreamServer.once('listening', resolve));
-  t.after(() => new Promise((resolve) => upstreamServer.close(resolve)));
-
-  const metrics = [];
-  const gateway = createGatewayApp({
-    config: { upstreamBaseUrl: `http://127.0.0.1:${upstreamServer.address().port}`, upstreamApiKey: '', requestTimeoutMs: 5000 },
-    store: {
-      getSettings: () => ({}),
-      findKeyByToken: () => ({ id: 'key-1', name: 'Pruebas' }),
-      recordMetric: async (metric) => metrics.push(metric)
-    },
-    cache: new ResponseCache({ ttlSeconds: 60, maxEntries: 10 })
-  });
-  const gatewayServer = gateway.listen(0, '127.0.0.1');
-  await new Promise((resolve) => gatewayServer.once('listening', resolve));
-  t.after(() => new Promise((resolve) => gatewayServer.close(resolve)));
-  const url = `http://127.0.0.1:${gatewayServer.address().port}/v1/chat/completions`;
-  const request = (headers = {}) => fetch(url, {
-    method: 'POST',
-    headers: { authorization: 'Bearer valid-key', 'content-type': 'application/json', ...headers },
-    body: JSON.stringify({ model: 'modelo', messages: [{ role: 'user', content: 'Hola' }] })
-  });
-
-  const miss = await request(); await miss.text();
-  const hit = await request(); await hit.text();
-  const bypass = await request({ 'cache-control': 'no-cache' }); await bypass.text();
-  assert.deepEqual([
-    miss.headers.get('x-lm-gateway-cache'),
-    hit.headers.get('x-lm-gateway-cache'),
-    bypass.headers.get('x-lm-gateway-cache')
-  ], ['MISS', 'HIT', 'BYPASS']);
-  assert.equal(upstreamCalls, 2);
-  assert.deepEqual(metrics.map((metric) => metric.cacheStatus), ['miss', 'hit', 'bypass']);
-});
-
-test('autentica un token real y persiste las dos capas de caché', async (t) => {
+test('autentica un token real y persiste únicamente la caché reportada por el proveedor', async (t) => {
   const testDir = await fs.mkdtemp(path.join(os.tmpdir(), 'benzia-proxy-cache-'));
   const store = new SqliteStore(testDir);
   await store.init();
@@ -221,7 +172,7 @@ test('autentica un token real y persiste las dos capas de caché', async (t) => 
       usage: {
         input_tokens: 8,
         output_tokens: 2,
-        input_tokens_details: { cached_tokens: upstreamCalls >= 3 ? 6 : 0 }
+        input_tokens_details: { cached_tokens: upstreamCalls >= 2 ? 6 : 0 }
       }
     });
   });
@@ -231,38 +182,31 @@ test('autentica un token real y persiste las dos capas de caché', async (t) => 
 
   const gateway = createGatewayApp({
     config: { upstreamBaseUrl: `http://127.0.0.1:${upstreamServer.address().port}`, upstreamApiKey: '', requestTimeoutMs: 5000 },
-    store,
-    cache: new ResponseCache({ ttlSeconds: 60, maxEntries: 10 })
+    store
   });
   const gatewayServer = gateway.listen(0, '127.0.0.1');
   await new Promise((resolve) => gatewayServer.once('listening', resolve));
   t.after(() => new Promise((resolve) => gatewayServer.close(resolve)));
 
   const url = `http://127.0.0.1:${gatewayServer.address().port}/v1/responses`;
-  const request = (input, headers = {}) => fetch(url, {
+  const request = (input) => fetch(url, {
     method: 'POST',
-    headers: { authorization: `Bearer ${access.token}`, 'content-type': 'application/json', ...headers },
+    headers: { authorization: `Bearer ${access.token}`, 'content-type': 'application/json' },
     body: JSON.stringify({ model: 'modelo', input })
   });
 
   const unauthorized = await fetch(url, { method: 'POST' });
   assert.equal(unauthorized.status, 401);
 
-  const miss = await request('respuesta cacheable'); await miss.text();
-  const hit = await request('respuesta cacheable'); await hit.text();
-  const lmFirst = await request('prompt cache LM', { 'cache-control': 'no-cache' }); await lmFirst.text();
-  const lmSecond = await request('prompt cache LM', { 'cache-control': 'no-cache' }); await lmSecond.text();
+  const lmFirst = await request('prompt cache LM'); await lmFirst.text();
+  const lmSecond = await request('prompt cache LM'); await lmSecond.text();
 
-  assert.deepEqual([
-    miss.headers.get('x-lm-gateway-cache'),
-    hit.headers.get('x-lm-gateway-cache'),
-    lmFirst.headers.get('x-lm-gateway-cache'),
-    lmSecond.headers.get('x-lm-gateway-cache')
-  ], ['MISS', 'HIT', 'BYPASS', 'BYPASS']);
-  assert.equal(upstreamCalls, 3);
+  assert.equal(lmFirst.headers.get('x-lm-gateway-cache'), null);
+  assert.equal(lmSecond.headers.get('x-lm-gateway-cache'), null);
+  assert.equal(upstreamCalls, 2);
 
   const metrics = store.getMetrics();
-  assert.deepEqual(metrics.map((metric) => metric.cacheStatus), ['miss', 'hit', 'bypass', 'bypass']);
-  assert.deepEqual(metrics.map((metric) => metric.lmCachedInputTokens), [0, null, 0, 6]);
+  assert.deepEqual(metrics.map((metric) => metric.lmCachedInputTokens), [0, 6]);
+  assert.ok(metrics.every((metric) => !('cacheStatus' in metric)));
   assert.ok(metrics.every((metric) => metric.keyId === access.id));
 });

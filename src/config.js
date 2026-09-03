@@ -21,8 +21,6 @@ export function loadConfig() {
     upstreamBaseUrl: normalizeBaseUrl(process.env.LM_STUDIO_BASE_URL || 'http://127.0.0.1:1234'),
     upstreamApiKey: process.env.LM_STUDIO_API_KEY || '',
     dataDir: path.resolve(process.env.DATA_DIR || './data'),
-    cacheTtlSeconds: numberFromEnv('CACHE_TTL_SECONDS', 300, { min: 0, max: 86400 }),
-    cacheMaxEntries: numberFromEnv('CACHE_MAX_ENTRIES', 250, { min: 0, max: 10000 }),
     requestTimeoutMs: numberFromEnv('REQUEST_TIMEOUT_MS', 300000, { min: 1000, max: 1800000 }),
     metricsRetentionDays: numberFromEnv('METRICS_RETENTION_DAYS', 30, { min: 1, max: 3650 })
   };
