@@ -6,8 +6,13 @@ const routes = {
   '/settings': 'settings'
 };
 
+const ADMIN_TOKEN_KEY = 'benzIA_admin_token';
+const legacyAdminToken = sessionStorage.getItem(ADMIN_TOKEN_KEY) || '';
+const rememberedAdminToken = localStorage.getItem(ADMIN_TOKEN_KEY) || legacyAdminToken;
+if (legacyAdminToken && !localStorage.getItem(ADMIN_TOKEN_KEY)) localStorage.setItem(ADMIN_TOKEN_KEY, legacyAdminToken);
+sessionStorage.removeItem(ADMIN_TOKEN_KEY);
 const pageName = routes[window.location.pathname.replace(/\/$/, '') || '/'] || 'dashboard';
-const state = { token: sessionStorage.getItem('benzIA_admin_token') || '', keys: [], overview: null, live: null, settings: null };
+const state = { token: rememberedAdminToken, keys: [], overview: null, live: null, settings: null };
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 const compactNumber = new Intl.NumberFormat('es-ES', { notation: 'compact', maximumFractionDigits: 1 });
@@ -29,6 +34,8 @@ async function api(path, options = {}) {
     headers: { 'content-type': 'application/json', 'x-admin-token': state.token, ...(options.headers || {}) }
   });
   if (response.status === 401) {
+    localStorage.removeItem(ADMIN_TOKEN_KEY);
+    state.token = '';
     showAuth();
     throw new Error('El token administrativo no es válido.');
   }
@@ -335,11 +342,11 @@ $('#auth-form').addEventListener('submit', async (event) => {
   const message = $('#auth-message');
   state.token = $('#admin-token').value;
   message.textContent = 'Verificando…'; message.classList.remove('error');
-  try { await api('/admin/api/session'); sessionStorage.setItem('benzIA_admin_token', state.token); hideAuth(); message.textContent = ''; await loadAll(); }
+  try { await api('/admin/api/session'); localStorage.setItem(ADMIN_TOKEN_KEY, state.token); hideAuth(); message.textContent = ''; await loadAll(); }
   catch (error) { message.textContent = error.message; message.classList.add('error'); }
 });
 
-$('#logout-button').addEventListener('click', () => { sessionStorage.removeItem('benzIA_admin_token'); state.token = ''; $('#admin-token').value = ''; showAuth(); });
+$('#logout-button').addEventListener('click', () => { localStorage.removeItem(ADMIN_TOKEN_KEY); sessionStorage.removeItem(ADMIN_TOKEN_KEY); state.token = ''; $('#admin-token').value = ''; showAuth(); });
 $('#range-filter').addEventListener('change', () => pageName === 'dashboard' && refreshOverview());
 $('#from-date').addEventListener('change', () => pageName === 'dashboard' && refreshOverview());
 $('#to-date').addEventListener('change', () => pageName === 'dashboard' && refreshOverview());

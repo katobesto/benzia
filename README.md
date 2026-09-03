@@ -51,7 +51,7 @@ También se admite `x-api-key`. Todas las rutas `/v1/*` se reenvían a Proveedor
 
 `/chat` ofrece una interfaz de conversación para probar los modelos cargados en Proveedor IA Local. Cada usuario debe introducir una clave activa creada en **Claves API**. La pantalla valida esa clave antes de consultar `/v1/models` y cada respuesta se solicita a `/v1/responses` usando el endpoint público configurado en el dashboard.
 
-Las conversaciones y el modelo seleccionado se conservan en `localStorage` del navegador; el token sólo permanece en `sessionStorage` hasta cerrar la pestaña. En cada turno se reenvía el historial de la conversación activa para conservar el contexto. El servidor mantiene su política de privacidad: no persiste mensajes ni respuestas, únicamente las métricas de uso ya descritas.
+Las conversaciones, el modelo seleccionado y el token de acceso se conservan en `localStorage` del navegador. El token administrativo del dashboard se almacena del mismo modo. Ambos permanecen en ese navegador y origen hasta usar **Cerrar sesión** o **Cambiar token**; no se comparten entre `localhost` y un dominio público distinto. En cada turno se reenvía el historial de la conversación activa para conservar el contexto. El servidor mantiene su política de privacidad: no persiste mensajes ni respuestas, únicamente las métricas de uso ya descritas.
 
 El chat web usa `/v1/responses` con `store: false`: conserva el historial únicamente en el navegador y permite que Proveedor IA Local reporte los tokens reutilizados por su prompt cache. Los clientes externos pueden seguir usando todos los endpoints OpenAI-compatible del gateway.
 

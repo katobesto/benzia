@@ -34,6 +34,8 @@ test('sirve la interfaz de chat sin exponer su configuración', async (t) => {
   const chatSource = await chatClient.text();
   assert.match(chatSource, /endpoint}\/responses/);
   assert.match(chatSource, /store: false/);
+  assert.match(chatSource, /localStorage\.setItem\(TOKEN_KEY, token\)/);
+  assert.doesNotMatch(chatSource, /sessionStorage\.setItem\(TOKEN_KEY, token\)/);
 
   const marked = await fetch(`${baseUrl}/vendor/marked.umd.js`);
   assert.equal(marked.status, 200);

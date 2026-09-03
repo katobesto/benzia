@@ -13,8 +13,12 @@ let pendingMarkdownFrame = 0;
 
 window.marked.setOptions({ gfm: true, breaks: true });
 
+const legacyChatToken = sessionStorage.getItem(TOKEN_KEY) || '';
+const rememberedChatToken = localStorage.getItem(TOKEN_KEY) || legacyChatToken;
+if (legacyChatToken && !localStorage.getItem(TOKEN_KEY)) localStorage.setItem(TOKEN_KEY, legacyChatToken);
+sessionStorage.removeItem(TOKEN_KEY);
 const state = {
-  token: sessionStorage.getItem(TOKEN_KEY) || '',
+  token: rememberedChatToken,
   endpoint: '',
   identity: null,
   models: [],
@@ -509,7 +513,7 @@ async function connect(token) {
   state.endpoint = config.endpoint;
   state.identity = config.identity;
   state.models = models;
-  sessionStorage.setItem(TOKEN_KEY, token);
+  localStorage.setItem(TOKEN_KEY, token);
   populateModels();
   $('#identity-pill').textContent = config.identity?.name || 'Clave activa';
   $('#access-screen').classList.add('dismissed');
@@ -540,6 +544,7 @@ function showAccess(message = '') {
   state.endpoint = '';
   state.identity = null;
   state.models = [];
+  localStorage.removeItem(TOKEN_KEY);
   sessionStorage.removeItem(TOKEN_KEY);
   document.body.classList.remove('ready');
   $('#access-screen').classList.remove('dismissed');
