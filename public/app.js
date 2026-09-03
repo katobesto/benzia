@@ -69,14 +69,24 @@ function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
 }
 
+function localDateBoundary(value, endOfDay = false) {
+  if (!value) return '';
+  const [year, month, day] = value.split('-').map(Number);
+  const date = new Date(year, month - 1, day, endOfDay ? 23 : 0, endOfDay ? 59 : 0, endOfDay ? 59 : 0, endOfDay ? 999 : 0);
+  return date.toISOString();
+}
+
 function overviewQuery() {
-  if (pageName === 'activity') return `hours=${encodeURIComponent($('#activity-range').value)}`;
-  const keyId = $('#key-filter').value;
-  const from = $('#from-date').value;
-  const to = $('#to-date').value;
-  const range = from || to
-    ? `${from ? `from=${encodeURIComponent(from)}` : ''}${to ? `${from ? '&' : ''}to=${encodeURIComponent(to)}` : ''}`
-    : `hours=${encodeURIComponent($('#range-filter').value)}`;
+  const activity = pageName === 'activity';
+  const keyId = $(activity ? '#activity-key-filter' : '#key-filter').value;
+  const from = $(activity ? '#activity-from-date' : '#from-date').value;
+  const to = $(activity ? '#activity-to-date' : '#to-date').value;
+  const hours = $(activity ? '#activity-range' : '#range-filter').value;
+  const fromBoundary = localDateBoundary(from);
+  const toBoundary = localDateBoundary(to, true);
+  const range = fromBoundary || toBoundary
+    ? `${fromBoundary ? `from=${encodeURIComponent(fromBoundary)}` : ''}${toBoundary ? `${fromBoundary ? '&' : ''}to=${encodeURIComponent(toBoundary)}` : ''}`
+    : `hours=${encodeURIComponent(hours)}`;
   return `${range}${keyId ? `&keyId=${encodeURIComponent(keyId)}` : ''}`;
 }
 
@@ -111,12 +121,20 @@ async function refreshLive() {
 }
 
 function renderKeyFilter() {
-  const select = $('#key-filter');
-  const selected = select.value;
-  select.innerHTML = '<option value="">Todas las claves</option>' + state.keys
+  const dashboardSelect = $('#key-filter');
+  const dashboardSelected = dashboardSelect.value;
+  dashboardSelect.innerHTML = '<option value="">Todas las claves</option>' + state.keys
     .filter((key) => !key.revokedAt)
     .map((key) => `<option value="${escapeHtml(key.id)}">${escapeHtml(key.name)}${key.pausedAt ? ' (pausada)' : ''}</option>`).join('');
-  if ([...select.options].some((option) => option.value === selected)) select.value = selected;
+  if ([...dashboardSelect.options].some((option) => option.value === dashboardSelected)) dashboardSelect.value = dashboardSelected;
+
+  const activitySelect = $('#activity-key-filter');
+  const activitySelected = activitySelect.value;
+  activitySelect.innerHTML = '<option value="">Todos los tokens</option>' + state.keys.map((key) => {
+    const stateLabel = key.revokedAt ? ' · revocada' : key.pausedAt ? ' · pausada' : '';
+    return `<option value="${escapeHtml(key.id)}">${escapeHtml(key.name)} · ${escapeHtml(key.prefix)}…${stateLabel}</option>`;
+  }).join('');
+  if ([...activitySelect.options].some((option) => option.value === activitySelected)) activitySelect.value = activitySelected;
 }
 
 function renderOverview() {
@@ -278,10 +296,16 @@ function renderActivity(items = []) {
   container.innerHTML = items.map((item) => {
     const hasLmCache = Number.isFinite(item.lmCachedInputTokens);
     const lmCacheRate = hasLmCache && item.inputTokens > 0 ? item.lmCachedInputTokens / item.inputTokens : null;
-    const cacheLabel = hasLmCache ? `${Math.round((lmCacheRate || 0) * 100)}% · ${compactNumber.format(item.lmCachedInputTokens)}` : 'No reportado';
+    const unsupportedChatCache = !hasLmCache && item.path === '/v1/chat/completions';
+    const cacheLabel = hasLmCache ? `${Math.round((lmCacheRate || 0) * 100)}% · ${compactNumber.format(item.lmCachedInputTokens)}` : unsupportedChatCache ? 'No disponible' : 'No reportado';
     const cacheClass = !hasLmCache ? 'unavailable' : item.lmCachedInputTokens > 0 ? 'reused' : 'processed';
+    const cacheTitle = hasLmCache
+      ? `${exactNumber.format(item.lmCachedInputTokens)} de ${exactNumber.format(item.inputTokens)} tokens de entrada reutilizados`
+      : unsupportedChatCache
+        ? 'LM Studio no ha incluido cached_tokens en esta respuesta de Chat Completions'
+        : 'El proveedor no incluyó cached_tokens en esta respuesta';
     const throughput = Number.isFinite(item.tokensPerSecond) ? `<small>${exactNumber.format(item.tokensPerSecond)} tok/s${item.throughputSource === 'estimated' ? ' ≈' : ''}</small>` : '';
-    return `<div class="activity-row"><span class="activity-time">${timeOnly.format(new Date(item.at))}</span><span class="activity-name">${escapeHtml(keys.get(item.keyId) || 'Clave eliminada')}</span><span class="activity-path">${escapeHtml(item.path)}${item.model ? ` · ${escapeHtml(item.model)}` : ''}</span><span class="activity-tokens">↓${compactNumber.format(item.inputTokens)} ↑${compactNumber.format(item.outputTokens)}</span><span class="cache-tag ${cacheClass}">${cacheLabel}</span><span class="activity-latency">${exactNumber.format(item.latencyMs)} ms${throughput}</span><span class="http-status ${item.status >= 400 ? 'error' : ''}">${item.status}</span></div>`;
+    return `<div class="activity-row"><span class="activity-time">${timeOnly.format(new Date(item.at))}</span><span class="activity-name">${escapeHtml(keys.get(item.keyId) || 'Clave eliminada')}</span><span class="activity-path">${escapeHtml(item.path)}${item.model ? ` · ${escapeHtml(item.model)}` : ''}</span><span class="activity-tokens">↓${compactNumber.format(item.inputTokens)} ↑${compactNumber.format(item.outputTokens)}</span><span class="cache-tag ${cacheClass}" title="${escapeHtml(cacheTitle)}">${cacheLabel}</span><span class="activity-latency">${exactNumber.format(item.latencyMs)} ms${throughput}</span><span class="http-status ${item.status >= 400 ? 'error' : ''}">${item.status}</span></div>`;
   }).join('');
 }
 
@@ -379,6 +403,14 @@ $('#key-filter').addEventListener('change', () => {
   refreshLive();
 });
 $('#activity-range').addEventListener('change', () => pageName === 'activity' && refreshOverview());
+$('#activity-key-filter').addEventListener('change', () => pageName === 'activity' && refreshOverview());
+$('#activity-from-date').addEventListener('change', () => pageName === 'activity' && refreshOverview());
+$('#activity-to-date').addEventListener('change', () => pageName === 'activity' && refreshOverview());
+$('#activity-clear-date-filter').addEventListener('click', () => {
+  $('#activity-from-date').value = '';
+  $('#activity-to-date').value = '';
+  if (pageName === 'activity') refreshOverview();
+});
 $$('[data-open-key-dialog]').forEach((button) => button.addEventListener('click', () => { $('#key-form').reset(); $('#key-message').textContent = ''; $('#key-dialog').showModal(); setTimeout(() => $('#key-name').focus(), 50); }));
 $('#key-form').addEventListener('submit', async (event) => {
   if (event.submitter?.value === 'cancel') return;

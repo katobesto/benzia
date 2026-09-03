@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
   <title>benzIA Console</title>
-  <link rel="stylesheet" href="/styles.css?v=20260903-3">
+  <link rel="stylesheet" href="/styles.css?v=20260903-4">
 </head>
 <body>
   <div class="app-shell">
@@ -61,8 +61,9 @@
       </section>
 
       <section class="page" data-page="activity">
-        <div class="page-heading"><div><p class="overline">REGISTRO DE PETICIONES</p><h1>Actividad</h1><p>Últimas solicitudes procesadas sin almacenar prompts ni respuestas.</p></div><div class="filters"><label>Periodo<select id="activity-range"><option value="6">6 horas</option><option value="24" selected>24 horas</option><option value="168">7 días</option><option value="720">30 días</option></select></label></div></div>
-        <article class="panel"><div class="panel-header"><div><h2>Solicitudes recientes</h2><p>Estado, tokens, caché del motor y rendimiento</p></div><span class="live-label"><i></i> LIVE</span></div><div class="activity-head"><span>Hora</span><span>Identidad</span><span>Endpoint / modelo</span><span>Tokens</span><span>Caché motor</span><span>Latencia / ritmo</span><span>HTTP</span></div><div id="activity-list" class="activity-list"><div class="empty-state">No hay solicitudes registradas</div></div></article>
+        <div class="page-heading activity-heading"><div><p class="overline">REGISTRO DE PETICIONES</p><h1>Actividad</h1><p>Últimas solicitudes procesadas sin almacenar prompts ni respuestas.</p></div><div class="filters activity-filters"><label>Token / nombre<select id="activity-key-filter"><option value="">Todos los tokens</option></select></label><label>Periodo<select id="activity-range"><option value="6">6 horas</option><option value="24" selected>24 horas</option><option value="168">7 días</option><option value="720">30 días</option></select></label><label>Desde<input id="activity-from-date" type="date" aria-label="Fecha inicial de actividad"></label><label>Hasta<input id="activity-to-date" type="date" aria-label="Fecha final de actividad"></label><button class="secondary-button filter-clear" id="activity-clear-date-filter" type="button">Limpiar fechas</button></div></div>
+        <div class="info-banner cache-reporting-note"><span class="info-icon">i</span><div><strong>La caché depende de la telemetría de LM Studio</strong><p><code>/v1/chat/completions</code> no está devolviendo <code>cached_tokens</code> en la versión actual. Cuando LM Studio lo incluya —por ejemplo mediante <code>/v1/responses</code>— se mostrará aquí el porcentaje y los tokens reutilizados reales.</p></div></div>
+        <article class="panel"><div class="panel-header"><div><h2>Solicitudes recientes</h2><p>Estado, tokens, caché reportada por el motor y rendimiento</p></div><span class="live-label"><i></i> LIVE</span></div><div class="activity-head"><span>Hora</span><span>Identidad</span><span>Endpoint / modelo</span><span>Tokens</span><span>Caché motor</span><span>Latencia / ritmo</span><span>HTTP</span></div><div id="activity-list" class="activity-list"><div class="empty-state">No hay solicitudes registradas</div></div></article>
       </section>
 
       <section class="page" data-page="settings">
@@ -83,6 +84,6 @@
   <dialog id="token-dialog"><div class="dialog-card token-card"><button class="dialog-close" id="close-token-dialog" type="button" aria-label="Cerrar">×</button><div class="dialog-icon success">✓</div><p class="overline">TOKEN GENERADO</p><h2>Cópialo ahora</h2><p>Por seguridad no volverá a mostrarse.</p><div class="secret-field"><code id="created-token"></code><button id="copy-token" type="button">Copiar</button></div><button class="primary-button wide" id="token-saved" type="button">He guardado el token</button></div></dialog>
   <dialog id="pause-dialog"><form method="dialog" class="dialog-card pause-card" id="pause-form"><button class="dialog-close" value="cancel" type="submit" aria-label="Cerrar">×</button><div class="dialog-icon pause-icon">Ⅱ</div><p class="overline">ACCESO EN PAUSA</p><h2 id="pause-dialog-title">Pausar clave</h2><p id="pause-dialog-copy">El usuario recibirá este aviso como respuesta del asistente.</p><label>Mensaje para el usuario<textarea id="pause-message" maxlength="500"></textarea><small id="pause-message-count">0 / 500</small></label><div class="pause-dialog-actions"><button class="secondary-button" id="pause-default" type="button">Usar predeterminado</button><button class="primary-button" id="pause-submit" type="submit">Pausar clave</button></div><p class="form-message" id="pause-message-error" aria-live="polite"></p></form></dialog>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
-  <script src="/app.js?v=20260903-4" type="module"></script>
+  <script src="/app.js?v=20260903-5" type="module"></script>
 </body>
 </html>
