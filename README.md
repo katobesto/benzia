@@ -30,7 +30,7 @@ El panel sólo escucha en `127.0.0.1` por defecto. El gateway escucha en todas l
 
 Primero cree una clave con nombre desde el panel. El secreto se muestra una sola vez.
 
-Una clave puede pausarse temporalmente desde **Claves API** y reanudarse conservando el mismo token. La revocación es definitiva. Una clave pausada puede abrir el chat y consultar la lista de modelos, pero sus inferencias no llegan al proveedor: benzIA devuelve una respuesta de asistente compatible, también en streaming, explicando que el administrador ha deshabilitado el acceso. Así el aviso aparece como contestación tanto en el chat como en clientes como OpenCode. Una clave inválida o revocada recibe HTTP `401`.
+Una clave puede pausarse temporalmente desde **Claves API** y reanudarse conservando el mismo token. La revocación es definitiva. Al pausar se puede definir un aviso personalizado de hasta 500 caracteres y editarlo después; si queda vacío se usa el mensaje administrativo predeterminado. Una clave pausada puede abrir el chat y consultar la lista de modelos, pero sus inferencias no llegan al proveedor: benzIA devuelve el aviso como respuesta de asistente compatible, también en streaming. Así aparece como contestación tanto en el chat como en clientes como OpenCode. Una clave inválida o revocada recibe HTTP `401`.
 
 ```javascript
 import OpenAI from "openai";

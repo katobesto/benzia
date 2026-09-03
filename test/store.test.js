@@ -17,12 +17,14 @@ test('las claves pueden pausarse, reanudarse y revocarse definitivamente', async
   assert.ok(created.token.startsWith('lmg_'));
   assert.equal(store.findKeyByToken(created.token).name, 'Pruebas');
   assert.equal(JSON.stringify(store.listKeys()).includes(created.token), false);
-  const paused = await store.setKeyPaused(created.id, true);
+  const paused = await store.setKeyPaused(created.id, true, 'Pago pendiente. Contacta con soporte.');
   assert.ok(paused.pausedAt);
+  assert.equal(paused.pausedMessage, 'Pago pendiente. Contacta con soporte.');
   assert.equal(store.findKeyByToken(created.token), null);
   assert.ok(store.findKeyByToken(created.token, { includeInactive: true }).pausedAt);
   const resumed = await store.setKeyPaused(created.id, false);
   assert.equal(resumed.pausedAt, null);
+  assert.equal(resumed.pausedMessage, 'Pago pendiente. Contacta con soporte.');
   assert.equal(store.findKeyByToken(created.token).name, 'Pruebas');
   await store.revokeKey(created.id);
   assert.equal(store.findKeyByToken(created.token), null);
@@ -54,6 +56,7 @@ test('añade el estado de pausa a una base SQLite existente sin perder claves', 
   t.after(async () => { store.close(); await fs.rm(testDir, { recursive: true, force: true }); });
   await store.init();
   assert.equal(store.listKeys()[0].pausedAt, null);
+  assert.equal(store.listKeys()[0].pausedMessage, null);
   assert.ok((await store.setKeyPaused('legacy-key', true)).pausedAt);
   assert.equal(store.findKeyByToken('legacy-token'), null);
 });

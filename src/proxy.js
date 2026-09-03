@@ -35,8 +35,7 @@ function pausedResponseObject(body, message, { completed = true } = {}) {
   };
 }
 
-function sendPausedInference(res, path, body) {
-  const message = PAUSED_TOKEN_MESSAGE;
+function sendPausedInference(res, path, body, message = PAUSED_TOKEN_MESSAGE) {
   const stream = Boolean(body?.stream);
   const id = `disabled_${crypto.randomUUID().replaceAll('-', '')}`;
   const created = Math.floor(Date.now() / 1000);
@@ -157,9 +156,9 @@ export function createGatewayApp({ config, store, adminApp, chatApp, liveActivit
     const body = req.body && Object.keys(req.body).length ? structuredClone(req.body) : undefined;
     const isStream = Boolean(body?.stream);
     const isInference = req.method === 'POST' && INFERENCE_PATHS.has(path);
-    if (accessKey.pausedAt && isInference) return sendPausedInference(res, path, body);
+    if (accessKey.pausedAt && isInference) return sendPausedInference(res, path, body, accessKey.pausedMessage || PAUSED_TOKEN_MESSAGE);
     if (accessKey.pausedAt && !path.startsWith('/v1/models')) {
-      return res.status(403).json(safeError(403, PAUSED_TOKEN_MESSAGE, 'access_disabled'));
+      return res.status(403).json(safeError(403, accessKey.pausedMessage || PAUSED_TOKEN_MESSAGE, 'access_disabled'));
     }
 
     const settings = effectiveSettings();

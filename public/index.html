@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
   <title>benzIA Console</title>
-  <link rel="stylesheet" href="/styles.css?v=20260903-2">
+  <link rel="stylesheet" href="/styles.css?v=20260903-3">
 </head>
 <body>
   <div class="app-shell">
@@ -81,7 +81,8 @@
 
   <dialog id="key-dialog"><form method="dialog" class="dialog-card" id="key-form"><button class="dialog-close" value="cancel" type="submit" aria-label="Cerrar">×</button><div class="dialog-icon">＋</div><p class="overline">NUEVA CLAVE API</p><h2>Crear identidad</h2><p>Asigna un nombre reconocible al usuario, equipo o aplicación.</p><label>Nombre de la clave<input id="key-name" name="name" maxlength="80" minlength="2" required placeholder="Ej. Equipo de desarrollo"></label><button class="primary-button wide" value="default" type="submit">Generar token</button><p class="form-message error" id="key-message" aria-live="polite"></p></form></dialog>
   <dialog id="token-dialog"><div class="dialog-card token-card"><button class="dialog-close" id="close-token-dialog" type="button" aria-label="Cerrar">×</button><div class="dialog-icon success">✓</div><p class="overline">TOKEN GENERADO</p><h2>Cópialo ahora</h2><p>Por seguridad no volverá a mostrarse.</p><div class="secret-field"><code id="created-token"></code><button id="copy-token" type="button">Copiar</button></div><button class="primary-button wide" id="token-saved" type="button">He guardado el token</button></div></dialog>
+  <dialog id="pause-dialog"><form method="dialog" class="dialog-card pause-card" id="pause-form"><button class="dialog-close" value="cancel" type="submit" aria-label="Cerrar">×</button><div class="dialog-icon pause-icon">Ⅱ</div><p class="overline">ACCESO EN PAUSA</p><h2 id="pause-dialog-title">Pausar clave</h2><p id="pause-dialog-copy">El usuario recibirá este aviso como respuesta del asistente.</p><label>Mensaje para el usuario<textarea id="pause-message" maxlength="500"></textarea><small id="pause-message-count">0 / 500</small></label><div class="pause-dialog-actions"><button class="secondary-button" id="pause-default" type="button">Usar predeterminado</button><button class="primary-button" id="pause-submit" type="submit">Pausar clave</button></div><p class="form-message" id="pause-message-error" aria-live="polite"></p></form></dialog>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
-  <script src="/app.js?v=20260903-3" type="module"></script>
+  <script src="/app.js?v=20260903-4" type="module"></script>
 </body>
 </html>

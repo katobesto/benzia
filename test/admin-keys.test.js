@@ -33,20 +33,33 @@ test('el panel pausa y reanuda una clave sin cambiar su token', async (t) => {
   });
 
   const endpoint = `http://127.0.0.1:${server.address().port}/admin/api/keys/${created.id}/access`;
-  const updateAccess = (paused) => fetch(endpoint, {
+  const updateAccess = (paused, pausedMessage) => fetch(endpoint, {
     method: 'PATCH',
     headers: { 'content-type': 'application/json', 'x-admin-token': 'admin-secret' },
-    body: JSON.stringify({ paused })
+    body: JSON.stringify({ paused, ...(pausedMessage === undefined ? {} : { pausedMessage }) })
   });
 
-  const pauseResponse = await updateAccess(true);
+  const pauseResponse = await updateAccess(true, 'Regulariza el pago para recuperar el acceso.');
   assert.equal(pauseResponse.status, 200);
-  assert.ok((await pauseResponse.json()).key.pausedAt);
+  const pausedKey = (await pauseResponse.json()).key;
+  assert.ok(pausedKey.pausedAt);
+  assert.equal(pausedKey.pausedMessage, 'Regulariza el pago para recuperar el acceso.');
   assert.equal(store.findKeyByToken(created.token), null);
   assert.ok(store.findKeyByToken(created.token, { includeInactive: true }).pausedAt);
 
+  const editResponse = await updateAccess(true, 'Contacta con Benzo para revisar tu cuenta.');
+  assert.equal(editResponse.status, 200);
+  const editedKey = (await editResponse.json()).key;
+  assert.equal(editedKey.pausedAt, pausedKey.pausedAt);
+  assert.equal(editedKey.pausedMessage, 'Contacta con Benzo para revisar tu cuenta.');
+
+  const tooLongResponse = await updateAccess(true, 'x'.repeat(501));
+  assert.equal(tooLongResponse.status, 400);
+
   const resumeResponse = await updateAccess(false);
   assert.equal(resumeResponse.status, 200);
-  assert.equal((await resumeResponse.json()).key.pausedAt, null);
+  const resumedKey = (await resumeResponse.json()).key;
+  assert.equal(resumedKey.pausedAt, null);
+  assert.equal(resumedKey.pausedMessage, 'Contacta con Benzo para revisar tu cuenta.');
   assert.equal(store.findKeyByToken(created.token).id, created.id);
 });

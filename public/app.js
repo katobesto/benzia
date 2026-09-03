@@ -7,6 +7,7 @@ const routes = {
 };
 
 const ADMIN_TOKEN_KEY = 'benzIA_admin_token';
+const DEFAULT_PAUSED_MESSAGE = 'Su token ha sido deshabilitado por el administrador. Consulte con Benzo para evaluar si se trata de un problema de pago o personal.';
 const legacyAdminToken = sessionStorage.getItem(ADMIN_TOKEN_KEY) || '';
 const rememberedAdminToken = localStorage.getItem(ADMIN_TOKEN_KEY) || legacyAdminToken;
 if (legacyAdminToken && !localStorage.getItem(ADMIN_TOKEN_KEY)) localStorage.setItem(ADMIN_TOKEN_KEY, legacyAdminToken);
@@ -259,13 +260,14 @@ function renderKeys() {
     const stateLabel = key.revokedAt ? 'Revocada' : key.pausedAt ? 'Pausada' : 'Activa';
     const stateClass = key.revokedAt ? 'revoked' : key.pausedAt ? 'paused' : '';
     const accessAction = key.pausedAt
-      ? `<button class="row-action resume-key" data-id="${escapeHtml(key.id)}" data-name="${escapeHtml(key.name)}" type="button">Reanudar</button>`
-      : `<button class="row-action pause-key" data-id="${escapeHtml(key.id)}" data-name="${escapeHtml(key.name)}" type="button">Pausar</button>`;
+      ? `<button class="row-action resume-key" data-id="${escapeHtml(key.id)}" type="button">Reanudar</button><button class="row-action edit-pause-message" data-id="${escapeHtml(key.id)}" type="button">Editar aviso</button>`
+      : `<button class="row-action pause-key" data-id="${escapeHtml(key.id)}" type="button">Pausar</button>`;
     const actions = key.revokedAt ? '' : `<div class="row-actions">${accessAction}<button class="row-action revoke-key" data-id="${escapeHtml(key.id)}" data-name="${escapeHtml(key.name)}" type="button">Revocar</button></div>`;
     return `<tr><td><strong>${escapeHtml(key.name)}</strong></td><td><code>${escapeHtml(key.prefix)}••••</code></td><td>${dateTime.format(new Date(key.createdAt))}</td><td>${key.lastUsedAt ? dateTime.format(new Date(key.lastUsedAt)) : 'Nunca'}</td><td><span class="state-pill ${stateClass}">${stateLabel}</span></td><td>${actions}</td></tr>`;
   }).join('');
-  table.querySelectorAll('.pause-key').forEach((button) => button.addEventListener('click', () => setKeyPaused(button.dataset.id, button.dataset.name, true)));
-  table.querySelectorAll('.resume-key').forEach((button) => button.addEventListener('click', () => setKeyPaused(button.dataset.id, button.dataset.name, false)));
+  table.querySelectorAll('.pause-key').forEach((button) => button.addEventListener('click', () => openPauseDialog(button.dataset.id, false)));
+  table.querySelectorAll('.edit-pause-message').forEach((button) => button.addEventListener('click', () => openPauseDialog(button.dataset.id, true)));
+  table.querySelectorAll('.resume-key').forEach((button) => button.addEventListener('click', () => resumeKey(button.dataset.id)));
   table.querySelectorAll('.revoke-key').forEach((button) => button.addEventListener('click', () => revokeKey(button.dataset.id, button.dataset.name)));
 }
 
@@ -326,11 +328,31 @@ async function revokeKey(id, name) {
   try { await api(`/admin/api/keys/${encodeURIComponent(id)}`, { method: 'DELETE' }); toast('Clave revocada'); await loadAll(); } catch (error) { toast(error.message); }
 }
 
-async function setKeyPaused(id, name, paused) {
-  if (paused && !confirm(`¿Pausar la clave “${name}”? Las inferencias recibirán el aviso administrativo hasta reanudarla.`)) return;
+function openPauseDialog(id, editing) {
+  const key = state.keys.find((item) => item.id === id);
+  if (!key || key.revokedAt) return;
+  $('#pause-form').dataset.id = id;
+  $('#pause-form').dataset.editing = editing ? 'true' : 'false';
+  $('#pause-dialog-title').textContent = editing ? `Aviso para ${key.name}` : `Pausar ${key.name}`;
+  $('#pause-dialog-copy').textContent = editing
+    ? 'Actualiza la respuesta que verá este usuario mientras su token permanezca pausado.'
+    : 'Las inferencias no llegarán al modelo. En su lugar, el usuario recibirá este mensaje como respuesta del asistente.';
+  $('#pause-message').value = key.pausedMessage || DEFAULT_PAUSED_MESSAGE;
+  $('#pause-message-error').textContent = '';
+  $('#pause-submit').textContent = editing ? 'Guardar aviso' : 'Pausar clave';
+  updatePauseMessageCount();
+  $('#pause-dialog').showModal();
+  setTimeout(() => $('#pause-message').focus(), 50);
+}
+
+function updatePauseMessageCount() {
+  $('#pause-message-count').textContent = `${$('#pause-message').value.length} / 500`;
+}
+
+async function resumeKey(id) {
   try {
-    await api(`/admin/api/keys/${encodeURIComponent(id)}/access`, { method: 'PATCH', body: JSON.stringify({ paused }) });
-    toast(paused ? 'Clave pausada' : 'Clave reanudada');
+    await api(`/admin/api/keys/${encodeURIComponent(id)}/access`, { method: 'PATCH', body: JSON.stringify({ paused: false }) });
+    toast('Clave reanudada');
     await loadAll();
   } catch (error) { toast(error.message); }
 }
@@ -364,6 +386,29 @@ $('#key-form').addEventListener('submit', async (event) => {
   try { const payload = await api('/admin/api/keys', { method: 'POST', body: JSON.stringify({ name: $('#key-name').value }) }); $('#key-dialog').close(); $('#created-token').textContent = payload.key.token; $('#token-dialog').showModal(); await loadAll(); }
   catch (error) { $('#key-message').textContent = error.message; }
 });
+$('#pause-form').addEventListener('submit', async (event) => {
+  if (event.submitter?.value === 'cancel') return;
+  event.preventDefault();
+  const form = event.currentTarget;
+  const editing = form.dataset.editing === 'true';
+  const message = $('#pause-message-error');
+  message.textContent = editing ? 'Guardando aviso…' : 'Pausando clave…';
+  message.classList.remove('error');
+  try {
+    await api(`/admin/api/keys/${encodeURIComponent(form.dataset.id)}/access`, {
+      method: 'PATCH',
+      body: JSON.stringify({ paused: true, pausedMessage: $('#pause-message').value })
+    });
+    $('#pause-dialog').close();
+    toast(editing ? 'Aviso actualizado' : 'Clave pausada');
+    await loadAll();
+  } catch (error) {
+    message.textContent = error.message;
+    message.classList.add('error');
+  }
+});
+$('#pause-message').addEventListener('input', updatePauseMessageCount);
+$('#pause-default').addEventListener('click', () => { $('#pause-message').value = DEFAULT_PAUSED_MESSAGE; updatePauseMessageCount(); $('#pause-message').focus(); });
 $('#copy-token').addEventListener('click', async () => { await navigator.clipboard.writeText($('#created-token').textContent); toast('Token copiado'); });
 $('#close-token-dialog').addEventListener('click', () => $('#token-dialog').close());
 $('#token-saved').addEventListener('click', () => $('#token-dialog').close());

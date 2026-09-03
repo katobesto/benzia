@@ -10,6 +10,7 @@ import { summarizeMetrics } from './metrics.js';
 const publicDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../public');
 
 const validName = (value) => typeof value === 'string' && value.trim().length >= 2 && value.trim().length <= 80;
+const validPausedMessage = (value) => value === undefined || value === null || (typeof value === 'string' && value.trim().length <= 500);
 
 export function createAdminApp({ config, store, liveActivity }) {
   const app = express();
@@ -73,7 +74,9 @@ export function createAdminApp({ config, store, liveActivity }) {
 
   app.patch('/admin/api/keys/:id/access', auth, async (req, res) => {
     if (typeof req.body?.paused !== 'boolean') return res.status(400).json({ error: 'El estado de pausa debe ser verdadero o falso.' });
-    const key = await store.setKeyPaused(req.params.id, req.body.paused);
+    if (!validPausedMessage(req.body?.pausedMessage)) return res.status(400).json({ error: 'El aviso personalizado no puede superar los 500 caracteres.' });
+    const pausedMessage = typeof req.body.pausedMessage === 'string' ? req.body.pausedMessage.trim() || null : null;
+    const key = await store.setKeyPaused(req.params.id, req.body.paused, pausedMessage);
     if (!key) return res.status(404).json({ error: 'Clave no encontrada o revocada.' });
     res.json({ key });
   });

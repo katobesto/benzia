@@ -72,6 +72,7 @@ test('publica el dashboard antes de autenticar las rutas de inferencia', async (
 
 test('un token pausado consulta modelos y recibe el aviso como respuesta de asistente', async (t) => {
   let upstreamCalls = 0;
+  let pausedMessage = 'Tu acceso está pausado. Contacta con Benzo para revisar tu suscripción.';
   const upstream = express();
   upstream.get('/v1/models', (_req, res) => {
     upstreamCalls += 1;
@@ -87,6 +88,7 @@ test('un token pausado consulta modelos y recibe el aviso como respuesta de asis
       id: 'paused-key',
       name: 'Acceso pausado',
       pausedAt: new Date().toISOString(),
+      pausedMessage,
       revokedAt: null
     }),
     recordMetric: async () => {}
@@ -118,7 +120,7 @@ test('un token pausado consulta modelos y recibe el aviso como respuesta de asis
   assert.match(responsesStream.headers.get('content-type'), /text\/event-stream/);
   const streamBody = await responsesStream.text();
   assert.match(streamBody, /response\.output_text\.delta/);
-  assert.match(streamBody, new RegExp(PAUSED_TOKEN_MESSAGE.replace(/[.*+?^$\{\}()|[\]\\]/g, '\\$&')));
+  assert.match(streamBody, new RegExp(pausedMessage.replace(/[.*+?^$\{\}()|[\]\\]/g, '\\$&')));
 
   const responsesJson = await fetch(`${baseUrl}/responses`, {
     method: 'POST',
@@ -126,7 +128,7 @@ test('un token pausado consulta modelos y recibe el aviso como respuesta de asis
     body: JSON.stringify({ model: 'modelo-local', input: 'Hola' })
   });
   assert.equal(responsesJson.status, 200);
-  assert.equal((await responsesJson.json()).output[0].content[0].text, PAUSED_TOKEN_MESSAGE);
+  assert.equal((await responsesJson.json()).output[0].content[0].text, pausedMessage);
 
   const chatCompletion = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
@@ -134,7 +136,7 @@ test('un token pausado consulta modelos y recibe el aviso como respuesta de asis
     body: JSON.stringify({ model: 'modelo-local', messages: [{ role: 'user', content: 'Hola' }] })
   });
   assert.equal(chatCompletion.status, 200);
-  assert.equal((await chatCompletion.json()).choices[0].message.content, PAUSED_TOKEN_MESSAGE);
+  assert.equal((await chatCompletion.json()).choices[0].message.content, pausedMessage);
 
   const chatStream = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
@@ -143,7 +145,15 @@ test('un token pausado consulta modelos y recibe el aviso como respuesta de asis
   });
   assert.equal(chatStream.status, 200);
   assert.match(chatStream.headers.get('content-type'), /text\/event-stream/);
-  assert.match(await chatStream.text(), new RegExp(PAUSED_TOKEN_MESSAGE.replace(/[.*+?^$\{\}()|[\]\\]/g, '\\$&')));
+  assert.match(await chatStream.text(), new RegExp(pausedMessage.replace(/[.*+?^$\{\}()|[\]\\]/g, '\\$&')));
+
+  pausedMessage = null;
+  const fallbackResponse = await fetch(`${baseUrl}/chat/completions`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ model: 'modelo-local', messages: [{ role: 'user', content: 'Hola' }] })
+  });
+  assert.equal((await fallbackResponse.json()).choices[0].message.content, PAUSED_TOKEN_MESSAGE);
   assert.equal(upstreamCalls, 1);
 });
 
