@@ -38,6 +38,10 @@ test('publica el dashboard antes de autenticar las rutas de inferencia', async (
   t.after(() => new Promise((resolve) => server.close(resolve)));
   const address = server.address();
 
+  const root = await fetch(`http://127.0.0.1:${address.port}/`, { redirect: 'manual' });
+  assert.equal(root.status, 302);
+  assert.equal(root.headers.get('location'), '/chat');
+
   const dashboard = await fetch(`http://127.0.0.1:${address.port}/dashboard`);
   assert.equal(dashboard.status, 200);
   assert.equal(dashboard.headers.get('www-authenticate'), null);

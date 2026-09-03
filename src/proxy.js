@@ -117,6 +117,7 @@ export function createGatewayApp({ config, store, adminApp, chatApp, liveActivit
   app.disable('x-powered-by');
   app.use(cors({ origin: true, credentials: false }));
 
+  app.get('/', (_req, res) => res.redirect(302, '/chat'));
   if (chatApp) app.use('/chat', chatApp);
 
   // Publica la carcasa del panel bajo el mismo hostname del gateway. Los datos

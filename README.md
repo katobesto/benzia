@@ -19,6 +19,7 @@ npm start
 
 - Panel administrativo: `http://localhost:3400`
 - Endpoint para usuarios: `http://IP-DEL-EQUIPO:3401/v1`
+- Entrada pública: `http://IP-DEL-EQUIPO:3401/` (redirige al chat)
 - Panel a través del gateway: `http://IP-DEL-EQUIPO:3401/dashboard`
 - Chat para usuarios: `http://IP-DEL-EQUIPO:3401/chat`
 - Proveedor IA Local esperado: `http://127.0.0.1:1234`
