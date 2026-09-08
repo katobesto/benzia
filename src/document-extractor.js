@@ -26,12 +26,15 @@ function cleanExtractedText(value) {
 }
 
 async function extractPdf(buffer) {
-  const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  const { getDocument, VerbosityLevel } = await import('pdfjs-dist/legacy/build/pdf.mjs');
   const loadingTask = getDocument({
     data: new Uint8Array(buffer),
     disableFontFace: true,
     isEvalSupported: false,
-    useSystemFonts: true
+    useSystemFonts: true,
+    // Solo importa el texto: con el nivel ERRORS se callan los avisos de la
+    // librería (p. ej. "TT: undefined function" por fuentes CFF) sin perder errores.
+    verbosity: VerbosityLevel.ERRORS
   });
   const document = await loadingTask.promise;
   const pages = [];
