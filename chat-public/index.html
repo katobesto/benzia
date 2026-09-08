@@ -6,7 +6,7 @@
   <meta name="color-scheme" content="dark">
   <meta name="description" content="Chat privado para probar los modelos servidos por benzIA.">
   <title>benzIA Chat</title>
-  <link rel="stylesheet" href="/chat/chat.css?v=20260904-4">
+  <link rel="stylesheet" href="/chat/chat.css?v=20260908-1">
 </head>
 <body>
   <div class="chat-shell" id="chat-shell" aria-hidden="true">
@@ -28,6 +28,23 @@
           <div class="model-control">
             <label for="model-select">Modelo</label>
             <select id="model-select" aria-label="Modelo activo"></select>
+          </div>
+          <div class="instructions-control">
+            <button class="instructions-button" id="instructions-button" type="button" aria-pressed="false" title="Define instrucciones de sistema que se añaden a cada petición de esta conversación."><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5h16M4 12h10M4 18.5h13"/></svg><span class="instructions-label" id="instructions-label">Instrucciones</span></button>
+            <section class="instructions-panel hidden" id="instructions-panel" aria-label="Instrucciones de sistema">
+              <header class="instructions-panel-head">
+                <strong>Instrucciones de sistema</strong>
+                <button class="instructions-close" id="instructions-close" type="button" aria-label="Cerrar panel">✕</button>
+              </header>
+              <p class="instructions-note">Se añaden como mensaje de sistema a cada petición de esta conversación. Elige un perfil sugerido (opcional) y añade tu propio texto; se envía todo junto al modelo.</p>
+              <div class="preset-grid">
+                <button class="preset-chip" type="button" data-preset="programacion" aria-pressed="false"><strong>Programación</strong><small>Código y diseños</small></button>
+                <button class="preset-chip" type="button" data-preset="literatura" aria-pressed="false"><strong>Literatura</strong><small>Creación y análisis</small></button>
+                <button class="preset-chip" type="button" data-preset="ciencia" aria-pressed="false"><strong>Ciencia</strong><small>Rigor y precisión</small></button>
+              </div>
+              <label class="instructions-custom-label" for="instructions-custom"><span>Personalizadas</span><small id="instructions-count">0/2000</small></label>
+              <textarea id="instructions-custom" rows="4" maxlength="2000" placeholder="Escribe reglas propias para este chat…"></textarea>
+            </section>
           </div>
         </div>
         <div class="header-right">
@@ -92,6 +109,6 @@
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
   <script src="/chat/vendor/purify.min.js" defer></script>
   <script src="/chat/vendor/marked.umd.js" defer></script>
-  <script src="/chat/chat.js?v=20260904-7" defer></script>
+  <script src="/chat/chat.js?v=20260908-1" defer></script>
 </body>
 </html>

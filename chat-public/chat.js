@@ -9,9 +9,28 @@ const MAX_ATTACHMENTS = 4;
 const MAX_IMAGE_SOURCE_BYTES = 10 * 1024 * 1024;
 const MAX_IMAGE_STORED_BYTES = 1_300_000;
 const MAX_DOCUMENT_CHARS = 120_000;
+const MAX_CUSTOM_INSTRUCTIONS = 2000;
 let pendingMarkdownFrame = 0;
 
 window.marked.setOptions({ gfm: true, breaks: true });
+
+// Perfiles de instrucciones de sistema. El texto de cada preset viaja como
+// mensaje system en cada petición; el planificador de la investigación web
+// no los recibe para que la personalidad no sesgue la decisión de buscar.
+const SYSTEM_PRESETS = {
+  programacion: {
+    label: 'Programación',
+    text: 'Eres un asistente de programación experto. Entrega código completo y ejecutable, en bloques de código con el idioma indicado, y comenta solo donde aporte valor. Ten en cuenta el lenguaje, las dependencias y el entorno que mencione el usuario; si la petición es ambigua, declara tus supuestos razonables. Explica brevemente las decisiones de diseño y señala posibles problemas de rendimiento, seguridad o casos límite. Si el código del usuario contiene errores, localízalos con precisión y muestra la corrección.'
+  },
+  literatura: {
+    label: 'Literatura',
+    text: 'Eres un asistente de creación y análisis literario. Al escribir, respeta el tono, el punto de vista y el registro del fragmento o de las indicaciones del usuario; evita clichés, moralismos y cierres predecibles. Prioriza detalles sensoriales concretos y una voz propia frente a la adjetivación genérica. Al analizar obras, sé específico: cita pasajes, identifica recursos y ofrece interpretaciones matizadas en lugar de resúmenes escolares. No rompas el tono narrativo con comentarios metalingüísticos salvo que el usuario los pida. Si se te pide continuar un texto, retómalo exactamente donde quedó, sin resúmenes ni repeticiones.'
+  },
+  ciencia: {
+    label: 'Ciencia',
+    text: 'Eres un asistente científico riguroso. Distingue explícitamente entre hechos consolidados, consenso de la comunidad, hipótesis y especulación; cuantifica cuando aporte precisión, con unidades, órdenes de magnitud o incertidumbres. Si el enunciado del usuario es impreciso o repite un error común, corrígelo brevemente antes de responder. Define los términos técnicos la primera vez que aparecen y usa notación clara. Si algo no lo sabes o está en disputa en la comunidad, dilo sin rellenar con conjeturas.'
+  }
+};
 
 const legacyChatToken = sessionStorage.getItem(TOKEN_KEY) || '';
 const rememberedChatToken = localStorage.getItem(TOKEN_KEY) || legacyChatToken;
@@ -86,6 +105,22 @@ function normalizedAttachments(value) {
   });
 }
 
+function normalizedInstructions(value) {
+  if (!value || typeof value !== 'object') return null;
+  const preset = SYSTEM_PRESETS[value.preset] ? value.preset : null;
+  const custom = String(value.custom || '').trim().slice(0, MAX_CUSTOM_INSTRUCTIONS);
+  return preset || custom ? { preset, custom } : null;
+}
+
+function instructionsFor(conversation) {
+  const instructions = normalizedInstructions(conversation?.instructions);
+  if (!instructions) return '';
+  const parts = [];
+  if (instructions.preset) parts.push(SYSTEM_PRESETS[instructions.preset].text);
+  if (instructions.custom) parts.push(instructions.custom);
+  return parts.join('\n\n');
+}
+
 function loadConversations() {
   try {
     const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
@@ -96,6 +131,7 @@ function loadConversations() {
         id: conversation.id,
         title: String(conversation.title || 'Nueva conversación').slice(0, 80),
         model: String(conversation.model || ''),
+        instructions: normalizedInstructions(conversation.instructions),
         createdAt: conversation.createdAt || new Date().toISOString(),
         updatedAt: conversation.updatedAt || new Date().toISOString(),
         messages: Array.isArray(conversation.messages)
@@ -634,6 +670,7 @@ function renderMessages({ scrollToEnd = false } = {}) {
 function renderAll({ scrollToEnd = false } = {}) {
   renderHistory();
   renderMessages({ scrollToEnd });
+  renderInstructionsControl();
 }
 
 function setConnection(kind, label) {
@@ -679,6 +716,7 @@ async function connect(token) {
   document.body.classList.add('ready');
   setConnection('online', 'Conectado');
   renderWebSearchControl();
+  renderInstructionsControl();
   renderAll();
   if (window.innerWidth > 620 && !window.matchMedia('(pointer: coarse)').matches) $('#message-input').focus();
 }
@@ -713,7 +751,46 @@ function showAccess(message = '') {
   $('#access-error').textContent = message;
   $('#access-token').value = '';
   renderWebSearchControl();
+  renderInstructionsControl();
   $('#access-token').focus();
+}
+
+function instructionsSummary(conversation) {
+  const instructions = normalizedInstructions(conversation?.instructions);
+  if (!instructions) return '';
+  return instructions.preset ? SYSTEM_PRESETS[instructions.preset].label : 'Personalizadas';
+}
+
+function renderInstructionsControl() {
+  const button = $('#instructions-button');
+  if (!button) return;
+  const label = instructionsSummary(activeConversation());
+  $('#instructions-label').textContent = label ? `Instrucciones: ${label}` : 'Instrucciones';
+  button.classList.toggle('active', Boolean(label));
+  button.setAttribute('aria-pressed', String(Boolean(label)));
+  const panel = $('#instructions-panel');
+  if (!panel.classList.contains('hidden')) syncInstructionsPanel(activeConversation());
+}
+
+function syncInstructionsPanel(conversation) {
+  const instructions = normalizedInstructions(conversation?.instructions) || { preset: null, custom: '' };
+  document.querySelectorAll('#instructions-panel .preset-chip').forEach((chip) => {
+    const selected = chip.dataset.preset === instructions.preset;
+    chip.classList.toggle('selected', selected);
+    chip.setAttribute('aria-pressed', String(selected));
+  });
+  const textarea = $('#instructions-custom');
+  if (document.activeElement !== textarea) textarea.value = instructions.custom;
+  $('#instructions-count').textContent = `${instructions.custom.length}/${MAX_CUSTOM_INSTRUCTIONS}`;
+}
+
+function setInstructions(conversation, patch) {
+  if (!conversation) return;
+  const current = normalizedInstructions(conversation.instructions) || { preset: null, custom: '' };
+  conversation.instructions = normalizedInstructions({ preset: patch.preset ?? current.preset, custom: patch.custom ?? current.custom });
+  saveConversations();
+  renderInstructionsControl();
+  syncInstructionsPanel(activeConversation());
 }
 
 function setGenerating(generating, abortable = true) {
@@ -722,6 +799,7 @@ function setGenerating(generating, abortable = true) {
   $('#attachment-input').disabled = generating;
   $('#attach-button').disabled = generating;
   $('#web-search-button').disabled = generating || !state.webSearchAvailable;
+  $('#instructions-button').disabled = generating;
   document.querySelectorAll('.remove-attachment').forEach((button) => { button.disabled = generating; });
   $('#send-button').classList.toggle('hidden', generating);
   $('#stop-button').classList.toggle('hidden', !generating || !abortable);
@@ -839,6 +917,8 @@ async function requestCompletion(conversation, webContext = '', useExistingPendi
     .map((message) => ({ type: 'message', role: message.role, content: contentForResponses(message) }));
   const grounding = webGroundingInstruction(webContext);
   if (grounding) context.unshift({ type: 'message', role: 'system', content: grounding });
+  const instructions = instructionsFor(conversation);
+  if (instructions) context.unshift({ type: 'message', role: 'system', content: instructions });
   if (!useExistingPending) conversation.messages.push({ role: 'assistant', content: '', pending: true });
   conversation.updatedAt = new Date().toISOString();
   renderMessages({ scrollToEnd: !useExistingPending });
@@ -965,6 +1045,7 @@ function newChat() {
   if (state.generating) return;
   state.activeId = '';
   state.pendingAttachments = [];
+  $('#instructions-panel').classList.add('hidden');
   renderPendingAttachments();
   localStorage.removeItem(ACTIVE_KEY);
   renderAll();
@@ -1013,6 +1094,31 @@ $('#web-search-button').addEventListener('click', () => {
   state.webSearchEnabled = !state.webSearchEnabled;
   renderWebSearchControl();
   toast(state.webSearchEnabled ? 'Búsqueda web activada para el próximo mensaje.' : 'Búsqueda web desactivada.');
+});
+$('#instructions-button').addEventListener('click', () => {
+  const panel = $('#instructions-panel');
+  const willOpen = panel.classList.contains('hidden');
+  panel.classList.toggle('hidden', !willOpen);
+  if (willOpen) syncInstructionsPanel(activeConversation());
+  renderInstructionsControl();
+});
+$('#instructions-close').addEventListener('click', () => {
+  $('#instructions-panel').classList.add('hidden');
+  renderInstructionsControl();
+});
+document.querySelectorAll('#instructions-panel .preset-chip').forEach((chip) => chip.addEventListener('click', () => {
+  const conversation = activeConversation();
+  const current = normalizedInstructions(conversation?.instructions);
+  setInstructions(conversation, { preset: current?.preset === chip.dataset.preset ? null : chip.dataset.preset });
+}));
+$('#instructions-custom').addEventListener('input', (event) => {
+  setInstructions(activeConversation(), { custom: event.currentTarget.value.slice(0, MAX_CUSTOM_INSTRUCTIONS) });
+});
+document.addEventListener('click', (event) => {
+  const panel = $('#instructions-panel');
+  if (panel.classList.contains('hidden')) return;
+  if (panel.contains(event.target) || event.target.closest?.('#instructions-button')) return;
+  panel.classList.add('hidden');
 });
 $('#attachment-input').addEventListener('change', (event) => addFiles(event.currentTarget.files));
 $('#mobile-rail').addEventListener('click', () => document.body.classList.add('rail-open'));

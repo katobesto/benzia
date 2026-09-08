@@ -65,6 +65,31 @@ body.ready .chat-shell { visibility: visible; }
 .model-control label { color: var(--muted); font-size: 14px; font-weight: 500; }
 .model-control select { max-width: 410px; min-width: 180px; height: 38px; padding: 0 28px 0 7px; border: 0; border-radius: 8px; outline: 0; background: transparent; color: var(--text); font-size: 15px; font-weight: 600; }
 .model-control select:hover, .model-control select:focus-visible { background: rgba(255,255,255,.06); }
+.instructions-control { position: relative; }
+.instructions-button { height: 38px; padding: 0 12px; display: inline-flex; align-items: center; gap: 7px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--muted); font-size: 13px; font-weight: 550; transition: .15s ease; }
+.instructions-button:hover { border-color: var(--line); background: rgba(255,255,255,.06); color: var(--text); }
+.instructions-button.active { border-color: rgba(89,220,181,.42); background: rgba(89,220,181,.12); color: var(--accent); }
+.instructions-button:disabled { cursor: wait; opacity: .45; }
+.instructions-button svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
+.instructions-label { max-width: 190px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.instructions-panel { position: absolute; top: calc(100% + 8px); left: 0; z-index: 30; width: min(360px, calc(100vw - 40px)); padding: 14px; border: 1px solid var(--line-strong); border-radius: 12px; background: #2b2b2b; box-shadow: 0 18px 50px rgba(0,0,0,.4); }
+.instructions-panel-head { display: flex; align-items: center; justify-content: space-between; }
+.instructions-panel-head strong { font-size: 13px; font-weight: 650; }
+.instructions-close { width: 26px; height: 26px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--dim); font-size: 13px; }
+.instructions-close:hover { background: rgba(255,255,255,.08); color: var(--text); }
+.instructions-note { margin: 7px 0 11px; color: var(--dim); font-size: 11px; line-height: 1.5; }
+.preset-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 7px; }
+.preset-chip { min-width: 0; padding: 8px 9px; display: grid; gap: 2px; border: 1px solid var(--line); border-radius: 9px; background: rgba(255,255,255,.03); text-align: left; color: var(--text); }
+.preset-chip strong { overflow: hidden; font-size: 12px; font-weight: 600; white-space: nowrap; text-overflow: ellipsis; }
+.preset-chip small { overflow: hidden; color: var(--dim); font-size: 10px; white-space: nowrap; text-overflow: ellipsis; }
+.preset-chip:hover { border-color: var(--line-strong); }
+.preset-chip.selected { border-color: rgba(89,220,181,.55); background: rgba(89,220,181,.12); }
+.preset-chip.selected strong { color: var(--accent); }
+.instructions-custom-label { display: flex; align-items: baseline; justify-content: space-between; margin: 12px 0 6px; color: var(--muted); font-size: 12px; font-weight: 550; }
+.instructions-custom-label small { color: var(--dim); font-weight: 400; }
+#instructions-custom { width: 100%; min-height: 84px; max-height: 160px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 9px; outline: 0; background: #232323; color: var(--text); font-size: 13px; line-height: 1.5; resize: vertical; }
+#instructions-custom:focus { border-color: var(--line-strong); }
+#instructions-custom::placeholder { color: #7d7d7d; }
 .connection-state { padding: 6px 9px; display: inline-flex; align-items: center; gap: 7px; border-radius: 999px; color: var(--muted); background: rgba(255,255,255,.045); font-size: 11px; }
 .connection-state i { width: 7px; height: 7px; border-radius: 50%; background: var(--dim); }
 .connection-state.online i { background: var(--accent); }
@@ -275,6 +300,8 @@ kbd { padding: 1px 4px; border: 1px solid var(--line); border-radius: 4px; color
   .composer-footer { padding-left: 9px; }
   .attach-button { width: 40px; height: 40px; }
   .web-search-button { height: 40px; padding: 0 8px; }
+  .instructions-button { height: 40px; padding: 0 9px; }
+  .instructions-label { display: none; }
   .send-button, .stop-button { width: 40px; height: 40px; }
   .disclaimer { padding: 0 5px; font-size: 10px; line-height: 1.35; }
   .access-card { padding: 24px 18px; border-radius: 15px; }
