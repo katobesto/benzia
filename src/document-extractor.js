@@ -27,12 +27,13 @@ function cleanExtractedText(value) {
 
 async function extractPdf(buffer) {
   const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs');
-  const document = await getDocument({
+  const loadingTask = getDocument({
     data: new Uint8Array(buffer),
     disableFontFace: true,
     isEvalSupported: false,
     useSystemFonts: true
-  }).promise;
+  });
+  const document = await loadingTask.promise;
   const pages = [];
   try {
     for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
@@ -43,7 +44,8 @@ async function extractPdf(buffer) {
       if (pages.join('\n\n').length > DOCUMENT_MAX_CHARS) break;
     }
   } finally {
-    await document.destroy();
+    // pdfjs-dist v6+: `destroy` vive en la loading task, no en el proxy del documento.
+    await loadingTask.destroy();
   }
   return pages.join('\n\n');
 }
