@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
   <title>benzIA Console</title>
-  <link rel="stylesheet" href="/styles.css?v=20260903-4">
+  <link rel="stylesheet" href="/styles.css?v=20260905-clean-1">
 </head>
 <body>
   <div class="app-shell">
@@ -17,6 +17,7 @@
         <a class="nav-link" data-route="keys" href="/keys"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 3.5a6 6 0 0 0-5.77 7.64L3 16.87V21h4.13l1-1H11v-2.87l1.86-1.86A6 6 0 1 0 14.5 3.5Zm0 3a3 3 0 1 1 0 6 3 3 0 0 1 0-6Z"/></svg>Claves API</a>
         <a class="nav-link" data-route="activity" href="/activity"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h2v16H4V4Zm5 8h2v8H9v-8Zm5-5h2v13h-2V7Zm5 3h2v10h-2V10Z"/></svg>Actividad</a>
         <p>SISTEMA</p>
+        <a class="nav-link" data-route="utilities" href="/utilities"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.7 6.3a1 1 0 0 1 1.4 0l1.6 1.6a1 1 0 0 1 0 1.4l-8.8 8.8-3.3.5.5-3.3 8.6-8.7ZM4 20h16v-2H4v2Z"/></svg>Utilidades</a>
         <a class="nav-link" data-route="settings" href="/settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.14 12.94c.03-.31.05-.62.05-.94s-.02-.63-.05-.94l2.03-1.58-1.92-3.32-2.39.96a7.3 7.3 0 0 0-1.62-.94L14.88 3h-3.84l-.36 3.18c-.58.24-1.12.55-1.62.94l-2.39-.96-1.92 3.32 2.03 1.58c-.03.31-.05.62-.05.94s.02.63.05.94l-2.03 1.58 1.92 3.32 2.39-.96c.5.39 1.04.7 1.62.94l.36 3.18h3.84l.36-3.18a7.3 7.3 0 0 0 1.62-.94l2.39.96 1.92-3.32-2.03-1.58ZM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Z"/></svg>Configuración</a>
       </nav>
       <div class="sidebar-bottom">
@@ -66,11 +67,32 @@
         <article class="panel"><div class="panel-header"><div><h2>Solicitudes recientes</h2><p>Estado, tokens, caché reportada por el motor y rendimiento</p></div><span class="live-label"><i></i> LIVE</span></div><div class="activity-head"><span>Hora</span><span>Identidad</span><span>Endpoint / modelo</span><span>Tokens</span><span>Caché motor</span><span>Latencia / ritmo</span><span>HTTP</span></div><div id="activity-list" class="activity-list"><div class="empty-state">No hay solicitudes registradas</div></div></article>
       </section>
 
+      <section class="page" data-page="utilities">
+        <div class="page-heading utilities-heading"><div><p class="overline">HERRAMIENTAS DE INTEGRACIÓN</p><h1>Utilidades</h1><p>Genera una configuración OpenCode para benzIA y otros servidores OpenAI-compatible.</p></div><a class="secondary-button" href="https://opencode.ai/docs/config" target="_blank" rel="noreferrer">Documentación OpenCode ↗</a></div>
+        <div class="info-banner utility-info"><span class="info-icon">i</span><div><strong>Conexión de modelos segura</strong><p>La comprobación de <code>/v1/models</code> se realiza desde benzIA. Los tokens introducidos aquí no se guardan ni se devuelven por la API; sólo se incluyen en el JSON si eliges hacerlo.</p></div></div>
+        <div class="utility-layout">
+          <div class="utility-builder">
+            <div class="utility-section-heading"><div><h2>Servidores y modelos</h2><p>Añade benzIA, LM Studio u otros orígenes. Cada uno genera un proveedor independiente.</p></div><button id="add-opencode-provider" class="secondary-button" type="button">＋ Añadir servidor</button></div>
+            <div id="opencode-providers" class="opencode-providers"></div>
+            <div class="utility-section-heading agents-heading"><div><h2>Subagentes</h2><p>Opcionales. Un modelo marcado como pequeño puede asignarse aquí para tareas rápidas.</p></div><button id="add-opencode-agent" class="secondary-button" type="button">＋ Añadir subagente</button></div>
+            <div id="opencode-agents" class="opencode-agents"></div>
+          </div>
+          <aside class="utility-output panel">
+            <div class="panel-header"><div><h2>opencode.json</h2><p>Formato compatible con OpenCode instalado</p></div><span id="opencode-json-state" class="connection-pill"><i></i> listo</span></div>
+            <div id="opencode-secret-warning" class="opencode-warning hidden"><strong>Incluye secretos</strong><span>Este JSON contiene tokens. Guárdalo fuera de repositorios y no lo compartas.</span></div>
+            <pre id="opencode-json" class="opencode-json" aria-label="Configuración generada"></pre>
+            <div class="opencode-output-actions"><button id="validate-opencode-json" class="secondary-button" type="button">Validar JSON</button><button id="copy-opencode-json" class="secondary-button" type="button">Copiar</button><button id="download-opencode-json" class="primary-button" type="button">Descargar</button></div>
+            <p id="opencode-output-message" class="form-message" aria-live="polite"></p>
+          </aside>
+        </div>
+      </section>
+
       <section class="page" data-page="settings">
         <div class="page-heading"><div><p class="overline">CONFIGURACIÓN DEL SISTEMA</p><h1>Configuración</h1><p>Define el origen local y el endpoint HTTPS que utilizarán tus clientes.</p></div></div>
         <form id="settings-form" class="settings-layout">
           <article class="panel settings-card"><div class="panel-header"><div><h2>Origen · Proveedor IA Local</h2><p>Servidor OpenAI-compatible al que benzIA reenvía las peticiones.</p></div><span class="connection-pill" id="settings-upstream-status"><i></i> comprobando</span></div><div class="form-grid"><label>URL del servidor<input id="upstream-url" name="upstreamBaseUrl" type="url" required placeholder="http://127.0.0.1:1234"><small>Normalmente es el puerto configurado en Local Server de Proveedor IA Local.</small></label><label>Clave de Proveedor IA Local <span class="optional">Opcional</span><input id="upstream-key" name="upstreamApiKey" type="password" autocomplete="new-password" placeholder="Sin autenticación"><small>Déjalo vacío para conservar la configuración actual.</small></label></div></article>
           <article class="panel settings-card cloudflare-card"><div class="panel-header"><div><h2>Acceso público · Cloudflare</h2><p>Dirección HTTPS que copiarán y utilizarán los clientes.</p></div><span class="cloudflare-badge">CLOUDFLARE READY</span></div><div class="form-grid public-grid"><label>URL pública del gateway<input id="public-gateway-url" name="publicGatewayUrl" type="url" required placeholder="https://llm.tudominio.com"><small>Introduce sólo el dominio base; benzIA añadirá <code>/v1</code>.</small></label><div class="tunnel-note"><span>ORIGEN DEL TÚNEL</span><code id="tunnel-origin">http://localhost:3401</code><small>Configura este origen en Cloudflare Tunnel. No expongas el puerto del panel.</small></div></div><div class="endpoint-preview"><span>ENDPOINT RESULTANTE</span><div><code id="gateway-url">http://localhost:3401/v1</code><button id="copy-endpoint" type="button">Copiar</button></div></div></article>
+          <article class="panel settings-card brave-card"><div class="panel-header"><div><h2>Contexto web · Brave Search</h2><p>El chat consulta Brave desde el servidor y añade fuentes recientes al mensaje.</p></div><span class="connection-pill" id="brave-search-status"><i></i> sin configurar</span></div><div class="form-grid"><label>Endpoint de Brave<input id="brave-search-endpoint" name="braveSearchEndpoint" type="url" required placeholder="https://api.search.brave.com/res/v1/web/search"><small>Usa HTTPS. Este endpoint funciona con el plan estándar de Brave Search.</small></label><label>Clave de Brave <span class="optional">Opcional</span><input id="brave-search-key" name="braveSearchApiKey" type="password" autocomplete="new-password" placeholder="Sin configurar"><small>Se guarda sólo en el servidor. Déjalo vacío para conservar la clave actual.</small></label></div><div class="brave-note"><span>CONTEXTO CONTROLADO</span><p>Por cada búsqueda se recuperan hasta 6 fuentes con sus extractos. El token nunca llega al navegador ni al proveedor local.</p></div></article>
           <article class="panel runtime-card"><div class="panel-header"><div><h2>Runtime</h2><p>Parámetros activos del proceso.</p></div></div><dl><div><dt>Puerto gateway</dt><dd id="gateway-port">—</dd></div><div><dt>Puerto panel</dt><dd id="admin-port">—</dd></div><div><dt>Caché de contexto</dt><dd>Gestionada por el proveedor</dd></div><div><dt>Almacenamiento</dt><dd id="storage-settings">—</dd></div><div><dt>Retención</dt><dd id="retention-settings">—</dd></div></dl></article>
           <div class="settings-actions"><p class="form-message" id="settings-message" aria-live="polite"></p><div><button class="secondary-button" id="test-upstream" type="button">Probar conexión</button><button class="primary-button" type="submit">Guardar cambios</button></div></div>
         </form>
@@ -84,6 +106,6 @@
   <dialog id="token-dialog"><div class="dialog-card token-card"><button class="dialog-close" id="close-token-dialog" type="button" aria-label="Cerrar">×</button><div class="dialog-icon success">✓</div><p class="overline">TOKEN GENERADO</p><h2>Cópialo ahora</h2><p>Por seguridad no volverá a mostrarse.</p><div class="secret-field"><code id="created-token"></code><button id="copy-token" type="button">Copiar</button></div><button class="primary-button wide" id="token-saved" type="button">He guardado el token</button></div></dialog>
   <dialog id="pause-dialog"><form method="dialog" class="dialog-card pause-card" id="pause-form"><button class="dialog-close" value="cancel" type="submit" aria-label="Cerrar">×</button><div class="dialog-icon pause-icon">Ⅱ</div><p class="overline">ACCESO EN PAUSA</p><h2 id="pause-dialog-title">Pausar clave</h2><p id="pause-dialog-copy">El usuario recibirá este aviso como respuesta del asistente.</p><label>Mensaje para el usuario<textarea id="pause-message" maxlength="500"></textarea><small id="pause-message-count">0 / 500</small></label><div class="pause-dialog-actions"><button class="secondary-button" id="pause-default" type="button">Usar predeterminado</button><button class="primary-button" id="pause-submit" type="submit">Pausar clave</button></div><p class="form-message" id="pause-message-error" aria-live="polite"></p></form></dialog>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
-  <script src="/app.js?v=20260903-5" type="module"></script>
+  <script src="/app.js?v=20260905-csp-1" type="module"></script>
 </body>
 </html>

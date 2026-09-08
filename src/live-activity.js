@@ -3,9 +3,10 @@ import { estimateTokens } from './usage.js';
 const roundRate = (value) => Math.round(value * 10) / 10;
 
 export class LiveActivity {
-  constructor({ now = () => Date.now() } = {}) {
+  constructor({ now = () => Date.now(), prefillRateReader = null } = {}) {
     this.active = new Map();
     this.now = now;
+    this.prefillRateReader = prefillRateReader;
   }
 
   begin({ id, keyId, keyName, path, model, startedAt }) {
@@ -20,7 +21,9 @@ export class LiveActivity {
       lastTokenAt: null,
       outputText: '',
       outputTokensApprox: 0,
-      samples: []
+      samples: [],
+      prefillAfter: this.prefillRateReader?.latestPrefillMarker?.() ?? null,
+      prefillTokensPerSecond: null
     });
   }
 
@@ -52,6 +55,10 @@ export class LiveActivity {
         const generationSeconds = oldestSample ? (now - oldestSample.at) / 1000 : 0;
         const tokensInWindow = oldestSample ? item.outputTokensApprox - oldestSample.tokens : 0;
         const isEmitting = item.lastTokenAt && now - item.lastTokenAt < 1500;
+        if (!isEmitting && item.prefillTokensPerSecond === null) {
+          item.prefillTokensPerSecond = this.prefillRateReader?.latestPrefillRate(item.prefillAfter ?? -Infinity) ?? null;
+        }
+        const prefillTokensPerSecond = !isEmitting ? item.prefillTokensPerSecond : null;
         const tokensPerSecond = generationSeconds >= 0.5
           ? roundRate(tokensInWindow / generationSeconds)
           : 0;
@@ -65,13 +72,14 @@ export class LiveActivity {
           startedAt: new Date(item.startedAt).toISOString(),
           elapsedMs: now - item.startedAt,
           outputTokensApprox: item.outputTokensApprox,
-          tokensPerSecond
+          tokensPerSecond,
+          prefillTokensPerSecond
         };
       });
 
     return {
       activeStreams: streams.length,
-      tokensPerSecond: roundRate(streams.reduce((sum, item) => sum + item.tokensPerSecond, 0)),
+      tokensPerSecond: roundRate(streams.reduce((sum, item) => sum + (item.status === 'emitting' ? item.tokensPerSecond : item.prefillTokensPerSecond || 0), 0)),
       streams
     };
   }

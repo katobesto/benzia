@@ -6,6 +6,7 @@ import { loadConfig } from './config.js';
 import { createGatewayApp } from './proxy.js';
 import { SqliteStore } from './store.js';
 import { LiveActivity } from './live-activity.js';
+import { createLlamaLogReader } from './llama-log.js';
 
 const config = loadConfig();
 
@@ -16,7 +17,7 @@ if (config.adminPort === config.gatewayPort) {
 
 const store = new SqliteStore(config.dataDir, config.metricsRetentionDays);
 await store.init();
-const liveActivity = new LiveActivity();
+const liveActivity = new LiveActivity({ prefillRateReader: createLlamaLogReader(config.llamaCppLogPath) });
 
 const adminApp = createAdminApp({ config, store, liveActivity });
 const chatApp = createChatApp({ config, store });

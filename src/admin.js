@@ -5,12 +5,35 @@ import express from 'express';
 import helmet from 'helmet';
 
 import { adminAuth } from './admin-auth.js';
+import { DEFAULT_BRAVE_SEARCH_ENDPOINT, normalizeBraveEndpoint } from './brave-search.js';
 import { summarizeMetrics } from './metrics.js';
 
 const publicDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../public');
 
 const validName = (value) => typeof value === 'string' && value.trim().length >= 2 && value.trim().length <= 80;
 const validPausedMessage = (value) => value === undefined || value === null || (typeof value === 'string' && value.trim().length <= 500);
+
+export function normalizeOpenCodeBaseUrl(value) {
+  if (typeof value !== 'string' || !value.trim()) throw new Error('Introduce una URL base para el servidor.');
+  const url = new URL(value.trim());
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
+    throw new Error('La URL debe ser HTTP(S), sin credenciales ni parámetros.');
+  }
+  const path = url.pathname.replace(/\/+$/, '');
+  url.pathname = path.endsWith('/v1') ? path : `${path || ''}/v1`;
+  return url.toString().replace(/\/+$/, '');
+}
+
+export function extractOpenAiModels(payload) {
+  if (!Array.isArray(payload?.data)) return [];
+  const seen = new Set();
+  return payload.data.flatMap((model) => {
+    const id = typeof model?.id === 'string' ? model.id.trim() : '';
+    if (!id || seen.has(id)) return [];
+    seen.add(id);
+    return [{ id, name: typeof model?.name === 'string' && model.name.trim() ? model.name.trim() : id }];
+  });
+}
 
 export function createAdminApp({ config, store, liveActivity }) {
   const app = express();
@@ -90,12 +113,15 @@ export function createAdminApp({ config, store, liveActivity }) {
   app.get('/admin/api/settings', auth, (_req, res) => {
     const settings = store.getSettings();
     const hasUpstreamApiKey = Boolean(settings.upstreamApiKey ?? config.upstreamApiKey);
+    const hasBraveSearchApiKey = Boolean(settings.braveSearchApiKey ?? config.braveSearchApiKey);
     res.json({
       upstreamBaseUrl: settings.upstreamBaseUrl || config.upstreamBaseUrl,
       hasUpstreamApiKey,
       gatewayPort: config.gatewayPort,
       adminPort: config.adminPort,
       publicGatewayUrl: settings.publicGatewayUrl || config.publicGatewayUrl,
+      braveSearchEndpoint: settings.braveSearchEndpoint || config.braveSearchEndpoint || DEFAULT_BRAVE_SEARCH_ENDPOINT,
+      hasBraveSearchApiKey,
       storage: store.storageStats?.() || null,
       retentionDays: config.metricsRetentionDays
     });
@@ -123,6 +149,15 @@ export function createAdminApp({ config, store, liveActivity }) {
     }
     if (typeof req.body.upstreamApiKey === 'string' && req.body.upstreamApiKey.length) patch.upstreamApiKey = req.body.upstreamApiKey;
     if (req.body.clearUpstreamApiKey === true) patch.upstreamApiKey = '';
+    if ('braveSearchEndpoint' in req.body) {
+      try {
+        patch.braveSearchEndpoint = normalizeBraveEndpoint(req.body.braveSearchEndpoint);
+      } catch (error) {
+        return res.status(400).json({ error: error.message || 'La URL de Brave no es válida.' });
+      }
+    }
+    if (typeof req.body.braveSearchApiKey === 'string' && req.body.braveSearchApiKey.length) patch.braveSearchApiKey = req.body.braveSearchApiKey.trim();
+    if (req.body.clearBraveSearchApiKey === true) patch.braveSearchApiKey = '';
     await store.updateSettings(patch);
     res.json({ updated: true });
   });
@@ -146,6 +181,48 @@ export function createAdminApp({ config, store, liveActivity }) {
       });
     } catch (error) {
       res.status(502).json({ online: false, latencyMs: Date.now() - startedAt, error: error.message });
+    }
+  });
+
+  // This endpoint is deliberately server-side: the dashboard never connects
+  // directly to a configured model host or exposes its access token in logs.
+  app.post('/admin/api/opencode/discover-models', auth, async (req, res) => {
+    let baseUrl;
+    try {
+      baseUrl = normalizeOpenCodeBaseUrl(req.body?.baseUrl);
+    } catch (error) {
+      return res.status(400).json({ error: error.message || 'La URL del servidor no es válida.' });
+    }
+    const apiKey = typeof req.body?.apiKey === 'string' ? req.body.apiKey.trim() : '';
+    if (apiKey.length > 1000) return res.status(400).json({ error: 'El token de acceso es demasiado largo.' });
+    const startedAt = Date.now();
+    try {
+      const response = await fetch(`${baseUrl}/models`, {
+        headers: apiKey ? { authorization: `Bearer ${apiKey}` } : {},
+        redirect: 'error',
+        signal: AbortSignal.timeout(8000)
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        return res.status(502).json({
+          online: false,
+          status: response.status,
+          latencyMs: Date.now() - startedAt,
+          error: `El servidor rechazó la consulta de modelos (HTTP ${response.status}).`
+        });
+      }
+      return res.json({
+        online: true,
+        status: response.status,
+        latencyMs: Date.now() - startedAt,
+        models: extractOpenAiModels(payload)
+      });
+    } catch {
+      return res.status(502).json({
+        online: false,
+        latencyMs: Date.now() - startedAt,
+        error: 'No se pudo conectar con el servidor OpenAI-compatible.'
+      });
     }
   });
 

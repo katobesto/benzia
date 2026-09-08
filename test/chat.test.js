@@ -51,6 +51,11 @@ test('sirve la interfaz de chat sin exponer su configuración', async (t) => {
   const blockedUpload = await fetch(`${baseUrl}/api/attachments/extract`, { method: 'POST' });
   assert.equal(blockedUpload.status, 401);
 
+  const blockedSearch = await fetch(`${baseUrl}/api/web-search`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ query: 'benzIA' })
+  });
+  assert.equal(blockedSearch.status, 401);
+
   const rejected = await fetch(`${baseUrl}/api/config`, { headers: { authorization: 'Bearer wrong-token' } });
   assert.equal(rejected.status, 401);
 
@@ -58,15 +63,32 @@ test('sirve la interfaz de chat sin exponer su configuración', async (t) => {
   assert.equal(paused.status, 200);
   assert.deepEqual(await paused.json(), {
     endpoint: 'https://gateway.example.test/v1',
-    identity: { id: 'key-2', name: 'Equipo pausado' }
+    identity: { id: 'key-2', name: 'Equipo pausado' },
+    webSearchAvailable: false
   });
 
   const allowed = await fetch(`${baseUrl}/api/config`, { headers: { authorization: 'Bearer valid-user-token' } });
   assert.equal(allowed.status, 200);
   assert.deepEqual(await allowed.json(), {
     endpoint: 'https://gateway.example.test/v1',
-    identity: { id: 'key-1', name: 'Equipo QA' }
+    identity: { id: 'key-1', name: 'Equipo QA' },
+    webSearchAvailable: false
   });
+
+  const unavailableSearch = await fetch(`${baseUrl}/api/web-search`, {
+    method: 'POST', headers: { authorization: 'Bearer valid-user-token', 'content-type': 'application/json' }, body: JSON.stringify({ query: 'benzIA' })
+  });
+  assert.equal(unavailableSearch.status, 503);
+  assert.doesNotMatch(await unavailableSearch.text(), /valid-user-token/);
+
+  const unavailableResearch = await fetch(`${baseUrl}/api/research/stream`, {
+    method: 'POST',
+    headers: { authorization: 'Bearer valid-user-token', 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'modelo-prueba', messages: [{ role: 'user', content: 'Busca benzIA' }] })
+  });
+  assert.equal(unavailableResearch.status, 200);
+  assert.match(unavailableResearch.headers.get('content-type'), /text\/event-stream/);
+  assert.match(await unavailableResearch.text(), /research\.error/);
 
   const form = new FormData();
   form.append('file', new Blob(['Texto adjunto de prueba'], { type: 'text/plain' }), 'prueba.txt');

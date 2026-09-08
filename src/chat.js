@@ -6,7 +6,9 @@ import helmet from 'helmet';
 import multer from 'multer';
 
 import { accessAuth } from './access-auth.js';
+import { searchBrave, validateSearchQuery } from './brave-search.js';
 import { DOCUMENT_MAX_BYTES, documentKind, extractDocument } from './document-extractor.js';
+import { runResearch } from './research.js';
 
 const chatPublicDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../chat-public');
 const vendorDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../node_modules');
@@ -26,6 +28,14 @@ export function createChatApp({ config, store }) {
   }));
 
   const auth = accessAuth(store);
+  app.use(express.json({ limit: '16kb' }));
+  const braveSettings = () => {
+    const settings = store.getSettings();
+    return {
+      endpoint: settings.braveSearchEndpoint || config.braveSearchEndpoint,
+      apiKey: settings.braveSearchApiKey ?? config.braveSearchApiKey
+    };
+  };
   const upload = multer({
     storage: multer.memoryStorage(),
     limits: { files: 1, fileSize: DOCUMENT_MAX_BYTES },
@@ -36,8 +46,51 @@ export function createChatApp({ config, store }) {
     const gatewayBaseUrl = (settings.publicGatewayUrl || config.publicGatewayUrl).replace(/\/+$/, '');
     res.json({
       endpoint: `${gatewayBaseUrl}/v1`,
-      identity: { id: req.accessKey.id, name: req.accessKey.name }
+      identity: { id: req.accessKey.id, name: req.accessKey.name },
+      webSearchAvailable: Boolean(braveSettings().apiKey)
     });
+  });
+
+  app.post('/api/web-search', auth, async (req, res) => {
+    let query;
+    try {
+      query = validateSearchQuery(req.body?.query);
+    } catch (error) {
+      return res.status(400).json({ error: error.message });
+    }
+    const settings = braveSettings();
+    try {
+      const result = await searchBrave({ endpoint: settings.endpoint, apiKey: settings.apiKey, query });
+      return res.json(result);
+    } catch (error) {
+      return res.status(error.status || 502).json({ error: error.message || 'No se pudo completar la búsqueda web.' });
+    }
+  });
+
+  app.post('/api/research/stream', auth, async (req, res) => {
+    const model = typeof req.body?.model === 'string' ? req.body.model.trim().slice(0, 200) : '';
+    if (!model || !Array.isArray(req.body?.messages)) return res.status(400).json({ error: 'Modelo o conversación de investigación no válidos.' });
+    res.status(200).set({
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-cache, no-transform',
+      connection: 'keep-alive',
+      'x-accel-buffering': 'no'
+    });
+    res.flushHeaders?.();
+    const emit = (type, payload) => {
+      if (!res.writableEnded) res.write(`data: ${JSON.stringify({ type, ...payload })}\n\n`);
+    };
+    if (req.accessKey.pausedAt) {
+      emit('research.status', { step: 'disabled', label: 'La búsqueda web no está disponible para este acceso.' });
+      emit('research.complete', { sources: [], context: '' });
+      return res.end();
+    }
+    try {
+      await runResearch({ config, store, accessKey: req.accessKey, model, messages: req.body.messages, emit });
+    } catch (error) {
+      emit('research.error', { message: error.message || 'No se pudo completar la investigación web.' });
+    }
+    return res.end();
   });
 
   app.post('/api/attachments/extract', auth, (req, res) => {

@@ -3,4 +3,5 @@ data/
 .env
 npm-debug.log*
 coverage/
+.tooling/
 

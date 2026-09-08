@@ -14,6 +14,7 @@ test('expone streams activos y los retira al terminar', () => {
   const snapshot = activity.snapshot();
   assert.equal(snapshot.activeStreams, 1);
   assert.equal(snapshot.streams[0].status, 'emitting');
+  assert.equal(snapshot.streams[0].prefillTokensPerSecond, null);
   assert.ok(snapshot.streams[0].outputTokensApprox > 0);
   assert.ok(snapshot.tokensPerSecond > 0);
   activity.finish('req-1');

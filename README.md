@@ -62,6 +62,14 @@ El compositor permite adjuntar hasta cuatro archivos mediante el selector, arras
 
 La extracción usa el endpoint protegido `POST /chat/api/attachments/extract`, por lo que también exige una clave de usuario activa. El navegador reduce cada imagen a un máximo de 1,3 MB antes de almacenarla y enviarla. Si `localStorage` se llena, la interfaz avisa para que se eliminen chats antiguos.
 
+### Contexto web con Brave Search
+
+Desde **Configuración → Contexto web · Brave Search** puede guardar el token de [Brave Search](https://api.search.brave.com/api-reference/web/search/get). El secreto se conserva en SQLite sólo en el servidor y nunca se entrega al navegador ni al proveedor local. Una vez configurado, el chat muestra el botón **Web**: al activarlo para un mensaje, benzIA consulta la API Web estándar de Brave, incorpora hasta seis fuentes con sus extractos sólo a esa respuesta, y muestra las fuentes al usuario.
+
+El contexto recuperado se marca como contenido externo no confiable antes de llegar al modelo; no se persiste junto a las conversaciones ni forma parte del siguiente turno. El endpoint protegido `POST /chat/api/web-search` requiere una clave de usuario válida. Brave limita la consulta a 400 caracteres/50 palabras, usa búsqueda segura moderada y aplica un timeout de 30 segundos. Puede cambiar el endpoint HTTPS desde el panel si Brave ofrece una ruta distinta; el predeterminado es `https://api.search.brave.com/res/v1/web/search`.
+
+Al usar el botón **Web**, el chat inicia una investigación visible: el backend entrega al modelo local una ventana de hasta 12 mensajes para decidir primero si la web aporta valor. Si hace falta, genera entre una y tres consultas autónomas, ejecuta esas búsquedas de Brave en paralelo, descarta URLs repetidas y construye un dossier de hasta ocho fuentes; si no, continúa directamente con la respuesta y lo comunica en la interfaz. El navegador recibe eventos SSE de planificación, búsquedas, selección de evidencia y respuesta final; muestra esos pasos y las fuentes, pero nunca el razonamiento interno ni los prompts de sistema. Las citas `[n]` que el modelo incluya en la respuesta se convierten en enlaces a esas fuentes. Si el planificador no devuelve JSON válido o falla, benzIA usa una consulta contextual de respaldo en lugar de interrumpir el turno. La llamada de planificación queda registrada como telemetría atribuida al token; la respuesta final continúa atravesando el gateway normal.
+
 ## Métricas y caché del proveedor
 
 - Cuando Proveedor IA Local entrega `usage`, benzIA conserva sus contadores exactos.
@@ -87,6 +95,8 @@ No se guardan prompts, mensajes, embeddings ni respuestas. Cada métrica contien
 | `GATEWAY_PORT` | `3401` | Puerto compatible con OpenAI |
 | `PUBLIC_GATEWAY_URL` | `http://localhost:3401` | URL mostrada en el panel |
 | `LM_STUDIO_BASE_URL` | `http://127.0.0.1:1234` | Servidor de Proveedor IA Local |
+| `BRAVE_SEARCH_ENDPOINT` | `https://api.search.brave.com/res/v1/web/search` | Endpoint opcional de contexto web de Brave |
+| `BRAVE_SEARCH_API_KEY` | — | Clave opcional de Brave Search; también configurable desde el panel |
 | `METRICS_RETENTION_DAYS` | `30` | Retención de telemetría |
 | `REQUEST_TIMEOUT_MS` | `300000` | Timeout de inferencia |
 

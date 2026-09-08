@@ -7,7 +7,7 @@ import { extractAccessToken, PAUSED_TOKEN_MESSAGE } from './access-auth.js';
 import { extractOutputText, extractUpstreamTelemetry, extractUsage } from './usage.js';
 
 const INFERENCE_PATHS = new Set(['/v1/chat/completions', '/v1/completions', '/v1/responses', '/v1/embeddings']);
-const DASHBOARD_PATHS = new Set(['/dashboard', '/keys', '/activity', '/settings', '/styles.css', '/app.js', '/favicon.ico']);
+const DASHBOARD_PATHS = new Set(['/dashboard', '/keys', '/activity', '/settings', '/utilities', '/styles.css', '/app.js', '/favicon.ico']);
 
 const safeError = (status, message, type = 'gateway_error') => ({
   error: { message, type, code: type, param: null }

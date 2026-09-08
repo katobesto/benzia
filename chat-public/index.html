@@ -6,7 +6,7 @@
   <meta name="color-scheme" content="dark">
   <meta name="description" content="Chat privado para probar los modelos servidos por benzIA.">
   <title>benzIA Chat</title>
-  <link rel="stylesheet" href="/chat/chat.css?v=20260902-4">
+  <link rel="stylesheet" href="/chat/chat.css?v=20260904-4">
 </head>
 <body>
   <div class="chat-shell" id="chat-shell" aria-hidden="true">
@@ -59,6 +59,7 @@
           <div class="composer-footer">
             <div class="composer-tools">
               <input class="visually-hidden" id="attachment-input" type="file" multiple accept="image/jpeg,image/png,image/webp,image/gif,.pdf,.docx,.txt,.md,.markdown,.csv,.json,.log,.xml,.yaml,.yml">
+              <button class="web-search-button hidden" id="web-search-button" type="button" aria-label="Acceso internet" aria-pressed="false" title="Agrega la capacidad de localizar informacion e investigar en internet para agregar al contexto de la conversacion."><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"></circle><path d="M3.8 12h16.4M12 3.5c2.1 2.3 3.2 5.1 3.2 8.5S14.1 18.2 12 20.5M12 3.5C9.9 5.8 8.8 8.6 8.8 12s1.1 6.2 3.2 8.5"></path></svg><span>Acceso internet</span></button>
               <button class="attach-button" id="attach-button" type="button" aria-label="Adjuntar imágenes o documentos" title="Adjuntar imágenes o documentos"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 11.5 12 20a5 5 0 0 1-7.1-7.1l9-9a3.5 3.5 0 0 1 5 5L9.7 18a2 2 0 1 1-2.8-2.8l8.4-8.4"/></svg></button>
               <span id="attachment-help"><kbd>Enter</kbd> enviar · arrastra, pega o adjunta archivos</span>
             </div>
@@ -91,6 +92,6 @@
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
   <script src="/chat/vendor/purify.min.js" defer></script>
   <script src="/chat/vendor/marked.umd.js" defer></script>
-  <script src="/chat/chat.js?v=20260903-10" defer></script>
+  <script src="/chat/chat.js?v=20260904-7" defer></script>
 </body>
 </html>

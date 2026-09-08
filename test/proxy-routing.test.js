@@ -14,6 +14,7 @@ import { SqliteStore } from '../src/store.js';
 test('publica el dashboard antes de autenticar las rutas de inferencia', async (t) => {
   const adminApp = express();
   adminApp.get('/dashboard', (_req, res) => res.type('html').send('<h1>Dashboard</h1>'));
+  adminApp.get('/utilities', (_req, res) => res.type('html').send('<h1>Utilidades</h1>'));
   adminApp.get('/admin/api/session', adminAuth('admin-secret'), (_req, res) => res.json({ ok: true }));
   const chatApp = express();
   chatApp.get('/', (_req, res) => res.type('html').send('<h1>benzIA Chat</h1>'));
@@ -46,6 +47,10 @@ test('publica el dashboard antes de autenticar las rutas de inferencia', async (
   assert.equal(dashboard.status, 200);
   assert.equal(dashboard.headers.get('www-authenticate'), null);
   assert.match(await dashboard.text(), /Dashboard/);
+
+  const utilities = await fetch(`http://127.0.0.1:${address.port}/utilities`);
+  assert.equal(utilities.status, 200);
+  assert.equal(utilities.headers.get('www-authenticate'), null);
 
   const chat = await fetch(`http://127.0.0.1:${address.port}/chat`);
   assert.equal(chat.status, 200);

@@ -1,6 +1,8 @@
 import crypto from 'node:crypto';
 import path from 'node:path';
 
+import { DEFAULT_BRAVE_SEARCH_ENDPOINT, normalizeBraveEndpoint } from './brave-search.js';
+
 const numberFromEnv = (name, fallback, { min = 0, max = Number.MAX_SAFE_INTEGER } = {}) => {
   const parsed = Number.parseInt(process.env[name] ?? '', 10);
   return Number.isFinite(parsed) ? Math.min(max, Math.max(min, parsed)) : fallback;
@@ -20,6 +22,9 @@ export function loadConfig() {
     publicGatewayUrl: normalizeBaseUrl(process.env.PUBLIC_GATEWAY_URL || `http://localhost:${process.env.GATEWAY_PORT || 3401}`),
     upstreamBaseUrl: normalizeBaseUrl(process.env.LM_STUDIO_BASE_URL || 'http://127.0.0.1:1234'),
     upstreamApiKey: process.env.LM_STUDIO_API_KEY || '',
+    llamaCppLogPath: process.env.LLAMA_CPP_LOG_PATH || '',
+    braveSearchEndpoint: normalizeBraveEndpoint(process.env.BRAVE_SEARCH_ENDPOINT || DEFAULT_BRAVE_SEARCH_ENDPOINT),
+    braveSearchApiKey: process.env.BRAVE_SEARCH_API_KEY || '',
     dataDir: path.resolve(process.env.DATA_DIR || './data'),
     requestTimeoutMs: numberFromEnv('REQUEST_TIMEOUT_MS', 300000, { min: 1000, max: 1800000 }),
     metricsRetentionDays: numberFromEnv('METRICS_RETENTION_DAYS', 30, { min: 1, max: 3650 })

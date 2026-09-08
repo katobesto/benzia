@@ -3,6 +3,7 @@ const routes = {
   '/dashboard': 'dashboard',
   '/keys': 'keys',
   '/activity': 'activity',
+  '/utilities': 'utilities',
   '/settings': 'settings'
 };
 
@@ -13,7 +14,7 @@ const rememberedAdminToken = localStorage.getItem(ADMIN_TOKEN_KEY) || legacyAdmi
 if (legacyAdminToken && !localStorage.getItem(ADMIN_TOKEN_KEY)) localStorage.setItem(ADMIN_TOKEN_KEY, legacyAdminToken);
 sessionStorage.removeItem(ADMIN_TOKEN_KEY);
 const pageName = routes[window.location.pathname.replace(/\/$/, '') || '/'] || 'dashboard';
-const state = { token: rememberedAdminToken, keys: [], overview: null, live: null, settings: null };
+const state = { token: rememberedAdminToken, keys: [], overview: null, live: null, settings: null, utility: { providers: [], agents: [] } };
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 const compactNumber = new Intl.NumberFormat('es-ES', { notation: 'compact', maximumFractionDigits: 1 });
@@ -104,6 +105,7 @@ async function loadAll() {
   renderKeyFilter();
   renderKeys();
   renderSettings();
+  renderOpenCodeUtility();
   if (state.overview) renderOverview();
   if (state.live) renderLive();
   checkUpstream();
@@ -187,10 +189,10 @@ function renderLive() {
     return;
   }
   container.innerHTML = live.streams.map((item) => `<div class="live-stream-row">
-    <span class="emission-indicator ${item.status}"><i></i>${item.status === 'emitting' ? 'Emitiendo' : 'Esperando'}</span>
+    <span class="emission-indicator ${item.status}"><i></i>${item.status === 'emitting' ? 'Emitiendo' : 'Prefill'}</span>
     <div class="live-identity"><strong>${escapeHtml(item.keyName || 'Clave eliminada')}</strong><small>${escapeHtml(item.model || item.path)}</small></div>
     <div class="live-output"><strong>≈ ${exactNumber.format(item.outputTokensApprox)}</strong><small>tokens de salida</small></div>
-    <div class="live-rate"><strong>${exactNumber.format(item.tokensPerSecond)}</strong><small>tok/s aprox.</small></div>
+    <div class="live-rate"><strong>${item.status === 'emitting' || item.prefillTokensPerSecond !== null ? exactNumber.format(item.status === 'emitting' ? item.tokensPerSecond : item.prefillTokensPerSecond) : '—'}</strong><small>${item.status === 'emitting' ? 'tok/s aprox.' : 'tok/s prefill'}</small></div>
     <span class="live-elapsed">${Math.max(1, Math.round(item.elapsedMs / 1000))} s</span>
   </div>`).join('');
 }
@@ -266,7 +268,11 @@ function renderKeyBars(items) {
   const container = $('#key-bars');
   if (!items.length) { container.innerHTML = '<div class="empty-state">No hay datos de consumo todavía</div>'; return; }
   const max = Math.max(...items.map((item) => item.inputTokens + item.outputTokens), 1);
-  container.innerHTML = items.slice(0, 12).map((item) => `<div class="key-bar-row"><span class="key-bar-name" title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</span><div class="bar-track" title="Entrada ${exactNumber.format(item.inputTokens)} · Salida ${exactNumber.format(item.outputTokens)}"><span class="bar-input" style="width:${item.inputTokens / max * 100}%"></span><span class="bar-output" style="width:${item.outputTokens / max * 100}%"></span></div><span class="key-bar-value">${compactNumber.format(item.inputTokens + item.outputTokens)}</span></div>`).join('');
+  container.innerHTML = items.slice(0, 12).map((item) => {
+    const input = Math.max(0, Number(item.inputTokens) || 0);
+    const output = Math.max(0, Number(item.outputTokens) || 0);
+    return `<div class="key-bar-row"><span class="key-bar-name" title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</span><svg class="bar-track" viewBox="0 0 ${max} 8" preserveAspectRatio="none" role="img" aria-label="Entrada ${exactNumber.format(input)} · Salida ${exactNumber.format(output)}"><rect class="bar-input" x="0" y="0" width="${input}" height="8"></rect><rect class="bar-output" x="${input}" y="0" width="${output}" height="8"></rect></svg><span class="key-bar-value">${compactNumber.format(input + output)}</span></div>`;
+  }).join('');
 }
 
 function renderKeys() {
@@ -314,6 +320,11 @@ function renderSettings() {
   $('#upstream-url').value = settings.upstreamBaseUrl;
   $('#upstream-key').placeholder = settings.hasUpstreamApiKey ? 'Configurada · vacío para conservar' : 'Sin autenticación';
   $('#public-gateway-url').value = settings.publicGatewayUrl;
+  $('#brave-search-endpoint').value = settings.braveSearchEndpoint;
+  $('#brave-search-key').placeholder = settings.hasBraveSearchApiKey ? 'Configurada · vacío para conservar' : 'Sin configurar';
+  const braveStatus = $('#brave-search-status');
+  braveStatus.className = `connection-pill ${settings.hasBraveSearchApiKey ? 'online' : ''}`;
+  braveStatus.innerHTML = `<i></i> ${settings.hasBraveSearchApiKey ? 'listo para chat' : 'sin configurar'}`;
   updateEndpointPreview();
   $('#gateway-port').textContent = settings.gatewayPort;
   $('#admin-port').textContent = settings.adminPort;
@@ -327,6 +338,227 @@ function renderSettings() {
 function updateEndpointPreview() {
   const base = ($('#public-gateway-url').value || state.settings?.publicGatewayUrl || '').replace(/\/+$/, '');
   $('#gateway-url').textContent = `${base}/v1`;
+}
+
+function utilityId(prefix) {
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function createOpenCodeProvider() {
+  const gateway = normalizeUtilityBaseUrl(state.settings?.publicGatewayUrl || '');
+  return {
+    id: utilityId('provider'), name: 'benzIA', identifier: 'benzia',
+    baseUrl: gateway || '', apiKey: '', models: [], status: null
+  };
+}
+
+function createOpenCodeModel(initial = {}) {
+  return {
+    id: utilityId('model'), modelId: initial.modelId || '', name: initial.name || initial.modelId || '',
+    context: 32768, output: 8192, image: false, tools: true, role: 'small',
+    reasoningEffort: '', preserveThinking: false
+  };
+}
+
+function createOpenCodeAgent() {
+  return {
+    id: utilityId('agent'), agentId: 'auxiliar', description: '', modelRef: '', mode: 'subagent',
+    permissions: { read: 'allow', grep: 'allow', shell: 'ask', edit: 'deny', websearch: 'allow', subagent: 'allow' }
+  };
+}
+
+function normalizeUtilityBaseUrl(value) {
+  try {
+    const url = new URL(String(value || '').trim());
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) return null;
+    const pathname = url.pathname.replace(/\/+$/, '');
+    url.pathname = pathname.endsWith('/v1') ? pathname : `${pathname || ''}/v1`;
+    return url.toString().replace(/\/+$/, '');
+  } catch { return null; }
+}
+
+function configIdentifier(value, fallback) {
+  const normalized = String(value || '').trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
+  return normalized && !/^\d/.test(normalized) ? normalized : fallback;
+}
+
+function uniqueConfigKey(base, taken) {
+  let candidate = base || 'model';
+  let number = 2;
+  while (taken.has(candidate)) candidate = `${base}-${number++}`;
+  taken.add(candidate);
+  return candidate;
+}
+
+function utilityModelOptions() {
+  return state.utility.providers.flatMap((provider) => provider.models
+    .filter((model) => model.modelId.trim())
+    .map((model) => ({ ref: `${provider.id}:${model.id}`, label: `${provider.name || 'Servidor'} · ${model.name || model.modelId}` })));
+}
+
+function buildOpenCodeConfig() {
+  const provider = {};
+  const references = new Map();
+  const providerNames = new Set();
+  let mainModel = '';
+  let smallModel = '';
+  let hasSecret = false;
+  const errors = [];
+  state.utility.providers.forEach((provider, providerIndex) => {
+    const baseUrl = normalizeUtilityBaseUrl(provider.baseUrl);
+    const usableModels = provider.models.filter((model) => model.modelId.trim());
+    if (!provider.name.trim() && !baseUrl && !usableModels.length) return;
+    if (!baseUrl) errors.push(`El servidor “${provider.name || providerIndex + 1}” necesita una URL /v1 válida.`);
+    if (!usableModels.length) errors.push(`Añade al menos un modelo para “${provider.name || providerIndex + 1}”.`);
+    const providerKey = uniqueConfigKey(configIdentifier(provider.identifier, `provider-${providerIndex + 1}`), providerNames);
+    const settings = { baseURL: baseUrl || '' };
+    if (provider.apiKey) { settings.apiKey = provider.apiKey; hasSecret = true; }
+    const models = {};
+    const modelNames = new Set();
+    usableModels.forEach((model, modelIndex) => {
+      const modelKey = uniqueConfigKey(model.modelId.trim() || `model-${modelIndex + 1}`, modelNames);
+      const limit = {
+        context: Math.max(1, Number.parseInt(model.context, 10) || 32768),
+        output: Math.max(1, Number.parseInt(model.output, 10) || 8192)
+      };
+      const options = {};
+      if (model.reasoningEffort) options.reasoningEffort = model.reasoningEffort;
+      models[modelKey] = {
+        name: model.name.trim() || model.modelId.trim(),
+        tool_call: Boolean(model.tools),
+        ...(model.reasoningEffort || model.preserveThinking ? { reasoning: true } : {}),
+        modalities: { input: model.image ? ['text', 'image'] : ['text'], output: ['text'] },
+        limit,
+        ...(Object.keys(options).length ? { options } : {})
+      };
+      const ref = `${provider.id}:${model.id}`;
+      references.set(ref, `${providerKey}/${modelKey}`);
+      if (model.role === 'main' && !mainModel) mainModel = `${providerKey}/${modelKey}`;
+      if (model.role === 'small' && !smallModel) smallModel = `${providerKey}/${modelKey}`;
+    });
+    provider[providerKey] = {
+      name: provider.name.trim() || providerKey,
+      npm: '@ai-sdk/openai-compatible',
+      options: settings,
+      models
+    };
+  });
+  const agents = {};
+  const agentNames = new Set();
+  state.utility.agents.forEach((agent, index) => {
+    const model = references.get(agent.modelRef);
+    if (!agent.agentId.trim() && !agent.description.trim() && !agent.modelRef) return;
+    if (!agent.agentId.trim()) errors.push(`El subagente ${index + 1} necesita un identificador.`);
+    if (!model) errors.push(`El subagente “${agent.agentId || index + 1}” necesita un modelo válido.`);
+    const agentKey = uniqueConfigKey(configIdentifier(agent.agentId, `subagent-${index + 1}`), agentNames);
+    const permission = Object.entries(agent.permissions)
+      .filter(([, effect]) => effect)
+      .reduce((result, [action, effect]) => ({ ...result, [action === 'shell' ? 'bash' : action === 'subagent' ? 'task' : action]: effect }), {});
+    agents[agentKey] = {
+      ...(agent.description.trim() ? { description: agent.description.trim() } : {}),
+      mode: agent.mode === 'primary' ? 'primary' : 'subagent',
+      ...(model ? { model } : {}),
+      ...(Object.keys(permission).length ? { permission } : {})
+    };
+  });
+  if (!Object.keys(provider).length) errors.push('Añade un servidor y, como mínimo, un modelo.');
+  if (!mainModel && Object.keys(provider).length) errors.push('Marca un modelo como principal.');
+  return {
+    config: {
+      $schema: 'https://opencode.ai/config.json',
+      ...(mainModel ? { model: mainModel } : {}),
+      ...(smallModel ? { small_model: smallModel } : {}),
+      provider,
+      ...(Object.keys(agents).length ? { agent: agents } : {})
+    },
+    errors,
+    hasSecret
+  };
+}
+
+function renderOpenCodeUtility() {
+  if (!state.utility.providers.length) state.utility.providers.push(createOpenCodeProvider());
+  const providers = $('#opencode-providers');
+  providers.innerHTML = state.utility.providers.map((provider, index) => {
+    const status = provider.status ? `<span class="utility-status ${provider.status.online ? 'online' : 'offline'}">${escapeHtml(provider.status.message)}</span>` : '';
+    return `<article class="panel opencode-provider" data-provider-id="${provider.id}">
+      <div class="panel-header"><div><h2>${escapeHtml(provider.name || `Servidor ${index + 1}`)}</h2><p>Proveedor OpenAI-compatible independiente</p></div><div class="provider-actions">${status}<button class="row-action remove-opencode-provider" type="button">Eliminar</button></div></div>
+      <div class="form-grid opencode-provider-fields">
+        <label>Nombre visible<input data-provider-field="name" value="${escapeHtml(provider.name)}" maxlength="80" placeholder="benzIA"></label>
+        <label>ID del proveedor<input data-provider-field="identifier" value="${escapeHtml(provider.identifier)}" maxlength="50" pattern="[A-Za-z0-9_-]+" placeholder="benzia"><small>Se usa en <code>provider/model</code>.</small></label>
+        <label class="wide-field">URL base<input data-provider-field="baseUrl" type="url" value="${escapeHtml(provider.baseUrl)}" autocomplete="url" placeholder="https://benzia.tudominio.com/v1" required><small>Se normaliza a <code>/v1</code> al comprobar y generar.</small></label>
+        <label>Token de acceso <span class="optional">Opcional</span><span class="secret-input"><input data-provider-field="apiKey" type="password" value="${escapeHtml(provider.apiKey)}" autocomplete="off" placeholder="lmg_…"><button class="toggle-utility-secret" type="button" aria-label="Mostrar token">Mostrar</button></span><small>No se guarda en benzIA.</small></label>
+      </div>
+      <div class="provider-tools"><button class="secondary-button test-opencode-provider" type="button">Probar conexión</button><button class="secondary-button discover-opencode-models" type="button">Detectar modelos</button><span>Consulta estándar <code>GET /v1/models</code></span></div>
+      <div class="models-heading"><div><h3>Modelos</h3><p>Configura capacidades y límites antes de generar.</p></div><button class="secondary-button add-opencode-model" type="button">＋ Añadir modelo</button></div>
+      <div class="opencode-models">${provider.models.length ? provider.models.map((model, modelIndex) => renderOpenCodeModel(model, modelIndex)).join('') : '<div class="utility-empty">Aún no hay modelos. Detecta los disponibles o añade uno manualmente.</div>'}</div>
+    </article>`;
+  }).join('');
+  const modelOptions = utilityModelOptions();
+  $('#opencode-agents').innerHTML = state.utility.agents.length ? state.utility.agents.map((agent, index) => renderOpenCodeAgent(agent, index, modelOptions)).join('') : '<div class="utility-empty">Sin subagentes. Puedes añadirlos para tareas auxiliares o modelos pequeños.</div>';
+  const generated = buildOpenCodeConfig();
+  $('#opencode-json').textContent = JSON.stringify(generated.config, null, 2);
+  $('#opencode-secret-warning').classList.toggle('hidden', !generated.hasSecret);
+  $('#opencode-json-state').className = `connection-pill ${generated.errors.length ? 'offline' : 'online'}`;
+  $('#opencode-json-state').innerHTML = `<i></i> ${generated.errors.length ? `${generated.errors.length} pendiente${generated.errors.length > 1 ? 's' : ''}` : 'listo'}`;
+}
+
+function renderOpenCodeModel(model, index) {
+  return `<article class="opencode-model" data-model-id="${model.id}">
+    <div class="model-title"><strong>Modelo ${index + 1}</strong><button class="row-action remove-opencode-model" type="button">Eliminar</button></div>
+    <div class="model-grid">
+      <label>ID real del modelo<input data-model-field="modelId" value="${escapeHtml(model.modelId)}" maxlength="180" placeholder="qwen3-8b-instruct"><small>El identificador enviado al servidor.</small></label>
+      <label>Nombre visible<input data-model-field="name" value="${escapeHtml(model.name)}" maxlength="120" placeholder="Qwen 3 8B"></label>
+      <label>Contexto<input data-model-field="context" type="number" min="1" max="10000000" value="${escapeHtml(model.context)}"></label>
+      <label>Salida máxima<input data-model-field="output" type="number" min="1" max="10000000" value="${escapeHtml(model.output)}"></label>
+      <label>Rol<select data-model-field="role"><option value="main" ${model.role === 'main' ? 'selected' : ''}>Modelo principal</option><option value="small" ${model.role === 'small' ? 'selected' : ''}>Modelo pequeño</option><option value="subagent" ${model.role === 'subagent' ? 'selected' : ''}>Para subagentes</option></select><small>«Pequeño» se emitirá como <code>small_model</code>.</small></label>
+      <label>Razonamiento <span class="optional">Opcional</span><select data-model-field="reasoningEffort"><option value="" ${!model.reasoningEffort ? 'selected' : ''}>Sin especificar</option><option value="low" ${model.reasoningEffort === 'low' ? 'selected' : ''}>Bajo</option><option value="medium" ${model.reasoningEffort === 'medium' ? 'selected' : ''}>Medio</option><option value="high" ${model.reasoningEffort === 'high' ? 'selected' : ''}>Alto</option></select></label>
+    </div>
+    <div class="model-toggles"><label><input data-model-field="tools" type="checkbox" ${model.tools ? 'checked' : ''}> Herramientas</label><label><input data-model-field="image" type="checkbox" ${model.image ? 'checked' : ''}> Acepta imágenes</label><label><input data-model-field="preserveThinking" type="checkbox" ${model.preserveThinking ? 'checked' : ''}> Preservar razonamiento</label></div>
+  </article>`;
+}
+
+function renderOpenCodeAgent(agent, index, modelOptions) {
+  const permissions = [['read', 'Lectura'], ['grep', 'Búsqueda'], ['shell', 'Terminal'], ['edit', 'Edición'], ['websearch', 'Web'], ['subagent', 'Subagentes']];
+  return `<article class="panel opencode-agent" data-agent-id="${agent.id}"><div class="panel-header"><div><h2>Subagente ${index + 1}</h2><p>Permisos explícitos para tareas delegadas.</p></div><button class="row-action remove-opencode-agent" type="button">Eliminar</button></div><div class="form-grid agent-grid"><label>ID del agente<input data-agent-field="agentId" value="${escapeHtml(agent.agentId)}" maxlength="60" placeholder="investigador"></label><label>Modelo<select data-agent-field="modelRef"><option value="">Selecciona un modelo</option>${modelOptions.map((option) => `<option value="${escapeHtml(option.ref)}" ${agent.modelRef === option.ref ? 'selected' : ''}>${escapeHtml(option.label)}</option>`).join('')}</select></label><label class="wide-field">Descripción <span class="optional">Opcional</span><input data-agent-field="description" value="${escapeHtml(agent.description)}" maxlength="200" placeholder="Investiga y sintetiza información"></label></div><div class="permission-grid">${permissions.map(([key, label]) => `<label>${label}<select data-permission="${key}"><option value="" ${!agent.permissions[key] ? 'selected' : ''}>Heredar</option><option value="allow" ${agent.permissions[key] === 'allow' ? 'selected' : ''}>Permitir</option><option value="ask" ${agent.permissions[key] === 'ask' ? 'selected' : ''}>Preguntar</option><option value="deny" ${agent.permissions[key] === 'deny' ? 'selected' : ''}>Denegar</option></select></label>`).join('')}</div></article>`;
+}
+
+function findUtilityProvider(id) { return state.utility.providers.find((provider) => provider.id === id); }
+function findUtilityModel(provider, id) { return provider?.models.find((model) => model.id === id); }
+
+async function queryOpenCodeModels(providerId, discover) {
+  const provider = findUtilityProvider(providerId);
+  if (!provider) return;
+  const baseUrl = normalizeUtilityBaseUrl(provider.baseUrl);
+  if (!baseUrl) { provider.status = { online: false, message: 'URL no válida' }; renderOpenCodeUtility(); return; }
+  provider.status = { online: false, message: 'Conectando…' }; renderOpenCodeUtility();
+  try {
+    const result = await api('/admin/api/opencode/discover-models', { method: 'POST', body: JSON.stringify({ baseUrl, apiKey: provider.apiKey }) });
+    provider.status = { online: true, message: `${result.models.length} modelo(s) · ${result.latencyMs} ms` };
+    if (discover) {
+      const known = new Set(provider.models.map((model) => model.modelId));
+      result.models.filter((model) => !known.has(model.id)).forEach((model) => provider.models.push(createOpenCodeModel({ modelId: model.id, name: model.name })));
+      if (!provider.models.some((model) => model.role === 'main') && provider.models[0]) provider.models[0].role = 'main';
+    }
+  } catch (error) {
+    provider.status = { online: false, message: error.message || 'Sin conexión' };
+  }
+  renderOpenCodeUtility();
+}
+
+function validateOpenCodeJson() {
+  const generated = buildOpenCodeConfig();
+  const message = $('#opencode-output-message');
+  try {
+    const parsed = JSON.parse($('#opencode-json').textContent);
+    if (parsed.$schema !== 'https://opencode.ai/config.json' || !parsed.provider || typeof parsed.provider !== 'object') throw new Error('No coincide con la estructura de OpenCode instalada.');
+    if (generated.errors.length) throw new Error(generated.errors.join(' '));
+    message.className = 'form-message';
+    message.textContent = 'JSON válido para la estructura de OpenCode instalada.';
+  } catch (error) {
+    message.className = 'form-message error';
+    message.textContent = error.message;
+  }
 }
 
 async function checkUpstream() {
@@ -451,14 +683,111 @@ $('#settings-form').addEventListener('submit', async (event) => {
   const message = $('#settings-message'); message.className = 'form-message'; message.textContent = 'Guardando cambios…';
   try {
     const upstreamApiKey = $('#upstream-key').value;
-    await api('/admin/api/settings', { method: 'PATCH', body: JSON.stringify({ upstreamBaseUrl: $('#upstream-url').value, publicGatewayUrl: $('#public-gateway-url').value, ...(upstreamApiKey ? { upstreamApiKey } : {}) }) });
-    $('#upstream-key').value = ''; message.textContent = 'Configuración guardada correctamente.'; await loadAll();
+    const braveSearchApiKey = $('#brave-search-key').value;
+    await api('/admin/api/settings', { method: 'PATCH', body: JSON.stringify({
+      upstreamBaseUrl: $('#upstream-url').value,
+      publicGatewayUrl: $('#public-gateway-url').value,
+      braveSearchEndpoint: $('#brave-search-endpoint').value,
+      ...(upstreamApiKey ? { upstreamApiKey } : {}),
+      ...(braveSearchApiKey ? { braveSearchApiKey } : {})
+    }) });
+    $('#upstream-key').value = ''; $('#brave-search-key').value = ''; message.textContent = 'Configuración guardada correctamente.'; await loadAll();
   } catch (error) { message.textContent = error.message; message.classList.add('error'); }
 });
 $('#test-upstream').addEventListener('click', async () => { const status = await checkUpstream(); toast(status?.online ? `Proveedor IA Local responde en ${status.latencyMs} ms · ${status.models.length} modelo(s)` : 'No se puede contactar con Proveedor IA Local'); });
 $('#mobile-menu').addEventListener('click', () => $('.sidebar').classList.toggle('open'));
 $('#token-chart').addEventListener('mousemove', showChartTooltip);
 $('#token-chart').addEventListener('mouseleave', hideChartTooltip);
+
+$('#add-opencode-provider').addEventListener('click', () => { state.utility.providers.push(createOpenCodeProvider()); renderOpenCodeUtility(); });
+$('#add-opencode-agent').addEventListener('click', () => { state.utility.agents.push(createOpenCodeAgent()); renderOpenCodeUtility(); });
+$('#opencode-providers').addEventListener('click', async (event) => {
+  const providerElement = event.target.closest('.opencode-provider');
+  const provider = findUtilityProvider(providerElement?.dataset.providerId);
+  if (!provider) return;
+  if (event.target.closest('.remove-opencode-provider')) {
+    state.utility.providers = state.utility.providers.filter((item) => item.id !== provider.id);
+    state.utility.agents.forEach((agent) => { if (agent.modelRef.startsWith(`${provider.id}:`)) agent.modelRef = ''; });
+    renderOpenCodeUtility();
+  } else if (event.target.closest('.add-opencode-model')) {
+    const model = createOpenCodeModel();
+    if (!state.utility.providers.some((item) => item.models.some((candidate) => candidate.role === 'main'))) model.role = 'main';
+    provider.models.push(model); renderOpenCodeUtility();
+  } else if (event.target.closest('.remove-opencode-model')) {
+    const modelElement = event.target.closest('.opencode-model');
+    const model = findUtilityModel(provider, modelElement?.dataset.modelId);
+    if (!model) return;
+    provider.models = provider.models.filter((item) => item.id !== model.id);
+    state.utility.agents.forEach((agent) => { if (agent.modelRef === `${provider.id}:${model.id}`) agent.modelRef = ''; });
+    if (!state.utility.providers.some((item) => item.models.some((candidate) => candidate.role === 'main'))) {
+      const fallbackProvider = state.utility.providers.find((item) => item.models.length);
+      if (fallbackProvider) fallbackProvider.models[0].role = 'main';
+    }
+    renderOpenCodeUtility();
+  } else if (event.target.closest('.test-opencode-provider')) {
+    await queryOpenCodeModels(provider.id, false);
+  } else if (event.target.closest('.discover-opencode-models')) {
+    await queryOpenCodeModels(provider.id, true);
+  } else if (event.target.closest('.toggle-utility-secret')) {
+    const input = event.target.closest('.secret-input')?.querySelector('input');
+    if (input) { input.type = input.type === 'password' ? 'text' : 'password'; event.target.textContent = input.type === 'password' ? 'Mostrar' : 'Ocultar'; }
+  }
+});
+$('#opencode-providers').addEventListener('input', (event) => {
+  const provider = findUtilityProvider(event.target.closest('.opencode-provider')?.dataset.providerId);
+  if (!provider) return;
+  const model = findUtilityModel(provider, event.target.closest('.opencode-model')?.dataset.modelId);
+  const field = event.target.dataset.modelField || event.target.dataset.providerField;
+  if (!field) return;
+  const target = model || provider;
+  target[field] = event.target.type === 'checkbox' ? event.target.checked : event.target.value;
+  $('#opencode-json').textContent = JSON.stringify(buildOpenCodeConfig().config, null, 2);
+  const generated = buildOpenCodeConfig();
+  $('#opencode-secret-warning').classList.toggle('hidden', !generated.hasSecret);
+});
+$('#opencode-providers').addEventListener('change', (event) => {
+  const provider = findUtilityProvider(event.target.closest('.opencode-provider')?.dataset.providerId);
+  const model = findUtilityModel(provider, event.target.closest('.opencode-model')?.dataset.modelId);
+  const field = event.target.dataset.modelField || event.target.dataset.providerField;
+  if (!provider || !field) return;
+  const target = model || provider;
+  target[field] = event.target.type === 'checkbox' ? event.target.checked : event.target.value;
+  if (model && field === 'role' && model.role === 'main') {
+    state.utility.providers.forEach((item) => item.models.forEach((candidate) => { if (candidate.id !== model.id) candidate.role = candidate.role === 'main' ? 'small' : candidate.role; }));
+    renderOpenCodeUtility();
+  } else {
+    const generated = buildOpenCodeConfig();
+    $('#opencode-json').textContent = JSON.stringify(generated.config, null, 2);
+    $('#opencode-secret-warning').classList.toggle('hidden', !generated.hasSecret);
+  }
+});
+$('#opencode-agents').addEventListener('click', (event) => {
+  const agentElement = event.target.closest('.opencode-agent');
+  if (!agentElement || !event.target.closest('.remove-opencode-agent')) return;
+  state.utility.agents = state.utility.agents.filter((agent) => agent.id !== agentElement.dataset.agentId);
+  renderOpenCodeUtility();
+});
+function updateOpenCodeAgent(event) {
+  const agent = state.utility.agents.find((item) => item.id === event.target.closest('.opencode-agent')?.dataset.agentId);
+  if (!agent) return;
+  if (event.target.dataset.permission) agent.permissions[event.target.dataset.permission] = event.target.value;
+  else if (event.target.dataset.agentField) agent[event.target.dataset.agentField] = event.target.value;
+  const generated = buildOpenCodeConfig();
+  $('#opencode-json').textContent = JSON.stringify(generated.config, null, 2);
+  $('#opencode-secret-warning').classList.toggle('hidden', !generated.hasSecret);
+}
+$('#opencode-agents').addEventListener('input', updateOpenCodeAgent);
+$('#opencode-agents').addEventListener('change', updateOpenCodeAgent);
+$('#validate-opencode-json').addEventListener('click', validateOpenCodeJson);
+$('#copy-opencode-json').addEventListener('click', async () => {
+  try { await navigator.clipboard.writeText($('#opencode-json').textContent); toast('Configuración copiada'); } catch { toast('No se pudo copiar la configuración.'); }
+});
+$('#download-opencode-json').addEventListener('click', () => {
+  const blob = new Blob([$('#opencode-json').textContent], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a'); anchor.href = url; anchor.download = 'opencode.json'; anchor.click();
+  URL.revokeObjectURL(url);
+});
 
 window.addEventListener('resize', () => { clearTimeout(window.chartResize); window.chartResize = setTimeout(() => pageName === 'dashboard' && state.overview && renderTimeline(state.overview.timeline), 120); });
 initializeRoute(); updateClock(); setInterval(updateClock, 1000);
