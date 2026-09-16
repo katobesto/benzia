@@ -63,8 +63,10 @@ body.ready .chat-shell { visibility: visible; }
 .mobile-rail { display: none; }
 .model-control { display: flex; align-items: center; gap: 7px; }
 .model-control label { color: var(--muted); font-size: 14px; font-weight: 500; }
-.model-control select { max-width: 410px; min-width: 180px; height: 38px; padding: 0 28px 0 7px; border: 0; border-radius: 8px; outline: 0; background: transparent; color: var(--text); font-size: 15px; font-weight: 600; }
+.model-control select { max-width: 410px; min-width: 180px; height: 38px; padding: 0 28px 0 7px; border: 0; border-radius: 8px; outline: 0; background: transparent; color: var(--text); color-scheme: dark; font-size: 15px; font-weight: 600; }
 .model-control select:hover, .model-control select:focus-visible { background: rgba(255,255,255,.06); }
+.model-control select option { background: #242424; color: #f2f2f2; font-weight: 500; }
+.model-control select option:checked { background: #355f54; color: #fff; }
 .instructions-control { position: relative; }
 .instructions-button { height: 38px; padding: 0 12px; display: inline-flex; align-items: center; gap: 7px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--muted); font-size: 13px; font-weight: 550; transition: .15s ease; }
 .instructions-button:hover { border-color: var(--line); background: rgba(255,255,255,.06); color: var(--text); }
@@ -160,6 +162,10 @@ body.ready .chat-shell { visibility: visible; }
 .message-content input[type="checkbox"] { margin: 0 7px 0 0; accent-color: var(--accent); }
 .message.pending .message-content::after { content: ""; width: 7px; height: 16px; margin-left: 3px; display: inline-block; vertical-align: -.14em; border-radius: 1px; background: var(--accent); animation: blink .8s step-end infinite; }
 .message.error .message-content { color: #ffabab; }
+.message-stats { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; }
+.stat { display: inline-flex; align-items: baseline; gap: 4px; padding: 3px 8px; border: 1px solid var(--line); border-radius: 6px; background: rgba(255,255,255,.03); }
+.stat small { color: var(--dim); font-size: 10px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+.stat-value { color: var(--muted); font-family: var(--mono); font-size: 11px; line-height: 1.2; }
 .web-sources { margin: 12px 0 0; padding: 10px 11px; display: grid; gap: 6px; border: 1px solid var(--line); border-radius: 10px; background: rgba(89,220,181,.045); }
 .web-sources > span { color: var(--accent); font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
 .web-sources a { overflow: hidden; color: var(--muted); font-size: 11px; line-height: 1.35; white-space: nowrap; text-decoration: none; text-overflow: ellipsis; }

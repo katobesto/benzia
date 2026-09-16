@@ -613,6 +613,113 @@ function contentForResponses(message) {
     : { type: 'input_text', text: item.text || '' });
 }
 
+function estimateTokens(text) {
+  if (!text) return 0;
+  const normalized = String(text).trim();
+  if (!normalized) return 0;
+  const asciiChars = (normalized.match(/[\x00-\x7F]/g) || []).length;
+  const nonAsciiChars = normalized.length - asciiChars;
+  return Math.max(1, Math.ceil(asciiChars / 4 + nonAsciiChars / 2));
+}
+
+function estimateContextInputTokens(context) {
+  if (!Array.isArray(context)) return 0;
+  let tokens = 0;
+  for (const item of context) {
+    if (typeof item.content === 'string') tokens += estimateTokens(item.content);
+    else if (Array.isArray(item.content)) {
+      for (const part of item.content) {
+        if (part.type === 'input_text' || part.type === 'text') tokens += estimateTokens(part.text || '');
+        else if (part.type === 'input_image' || part.type === 'image_url') tokens += 85;
+      }
+    }
+    tokens += 3;
+  }
+  return tokens;
+}
+
+function computeStats(message, timing, usage) {
+  if (!timing?.startedAt) return null;
+  const endTime = performance.now();
+  const responseTimeMs = endTime - timing.startedAt;
+  const ttftMs = timing.firstTokenAt ? timing.firstTokenAt - timing.startedAt : null;
+  const inputTokens = usage?.input_tokens ?? 0;
+  const outputTokens = usage?.output_tokens ?? 0;
+  const reasoningTokens = usage?.output_tokens_details?.reasoning_tokens ?? 0;
+  const visibleOutputTokens = Math.max(0, outputTokens - reasoningTokens);
+  const prefillTokensPerSec = (ttftMs && inputTokens > 0) ? inputTokens / (ttftMs / 1000) : null;
+  const genStart = timing.firstVisibleAt || timing.firstTokenAt || 0;
+  const genMs = genStart ? endTime - genStart : 0;
+  const generationTokensPerSec = (genMs > 0 && visibleOutputTokens > 0) ? visibleOutputTokens / (genMs / 1000) : null;
+  return {
+    responseTimeMs: Math.round(responseTimeMs),
+    ttftMs: ttftMs ? Math.round(ttftMs) : null,
+    prefillTokensPerSec: prefillTokensPerSec ? Math.round(prefillTokensPerSec * 10) / 10 : null,
+    generationTokensPerSec: generationTokensPerSec ? Math.round(generationTokensPerSec * 10) / 10 : null,
+    inputTokens,
+    outputTokens,
+    reasoningTokens,
+    visibleOutputTokens,
+    hasUsage: Boolean(usage)
+  };
+}
+
+function statChip(label, value) {
+  const chip = document.createElement('span');
+  chip.className = 'stat';
+  const name = document.createElement('small');
+  name.textContent = label;
+  const val = document.createElement('span');
+  val.className = 'stat-value';
+  val.textContent = value;
+  chip.append(name, val);
+  return chip;
+}
+
+function formatTps(value) {
+  if (!Number.isFinite(value) || value <= 0) return '—';
+  if (value >= 100) return String(Math.round(value));
+  return String(Math.round(value * 10) / 10);
+}
+
+function formatMs(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return '—';
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
+  const min = Math.floor(ms / 60000);
+  const sec = Math.round((ms % 60000) / 1000);
+  return `${min}m ${sec}s`;
+}
+
+function buildStatsDom(message) {
+  const container = document.createElement('div');
+  container.className = 'message-stats';
+  if (message.pending) {
+    const timing = message._timing;
+    if (timing?.firstTokenAt) {
+      const now = performance.now();
+      const elapsed = now - timing.startedAt;
+      const visibleTokens = estimateTokens(message.content || '');
+      const genStart = timing.firstVisibleAt || timing.firstTokenAt || timing.startedAt;
+      const genElapsed = Math.max(1, now - genStart);
+      const tps = visibleTokens / (genElapsed / 1000);
+      if (tps > 0) container.append(statChip('velocidad', `${formatTps(tps)} tok/s`));
+      container.append(statChip('respuesta', formatMs(elapsed)));
+    }
+    return container;
+  }
+  const stats = message.stats;
+  if (!stats) return container;
+  if (stats.responseTimeMs) container.append(statChip('respuesta', formatMs(stats.responseTimeMs)));
+  if (stats.generationTokensPerSec) container.append(statChip('generación', `${formatTps(stats.generationTokensPerSec)} tok/s`));
+  if (stats.prefillTokensPerSec) container.append(statChip('prefill', `${formatTps(stats.prefillTokensPerSec)} tok/s`));
+  if (stats.outputTokens > 0) {
+    const tokenLabel = `${stats.inputTokens}→${stats.visibleOutputTokens}` + (stats.reasoningTokens ? ` (+${stats.reasoningTokens} CoT)` : '');
+    container.append(statChip('tokens', tokenLabel));
+  }
+  return container;
+}
+
 function messageElement(message, index) {
   const article = document.createElement('article');
   article.className = `message ${message.role}${message.pending ? ' pending' : ''}${message.error ? ' error' : ''}`;
@@ -650,6 +757,10 @@ function messageElement(message, index) {
   const webSources = webSourcesElement(message.webSearch);
   if (webSources) body.append(webSources);
   body.append(content);
+  if (message.role === 'assistant') {
+    const stats = buildStatsDom(message);
+    if (stats.childElementCount) body.append(stats);
+  }
   article.append(avatar, body);
   return article;
 }
@@ -822,8 +933,12 @@ function updatePendingMessage(conversation, content) {
   if (pendingMarkdownFrame) return;
   pendingMarkdownFrame = requestAnimationFrame(() => {
     pendingMarkdownFrame = 0;
-    const element = $(`.message[data-index="${conversation.messages.length - 1}"] .message-content`);
-    if (element) appendMessageContent(element, message.content || 'Pensando', message.research?.sources || []);
+    const article = $(`.message[data-index="${conversation.messages.length - 1}"]`);
+    if (!article) return;
+    const contentEl = article.querySelector('.message-content');
+    if (contentEl) appendMessageContent(contentEl, message.content || 'Pensando', message.research?.sources || []);
+    const statsEl = article.querySelector('.message-stats');
+    if (statsEl) statsEl.replaceChildren(...buildStatsDom(message).children);
   });
 }
 
@@ -925,8 +1040,11 @@ async function requestCompletion(conversation, webContext = '', useExistingPendi
   saveConversations();
   setGenerating(true);
   state.controller = new AbortController();
+  const assistantMessage = conversation.messages.at(-1);
+  assistantMessage._timing = { startedAt: performance.now(), firstTokenAt: 0, firstVisibleAt: 0 };
 
   let output = '';
+  let usage = null;
   try {
     const response = await fetch(`${state.endpoint}/responses`, {
       method: 'POST',
@@ -950,12 +1068,22 @@ async function requestCompletion(conversation, webContext = '', useExistingPendi
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
       buffer = consumeSse(buffer, (payload) => {
+        const timing = assistantMessage._timing;
+        const anyFragment = payload.type?.endsWith('.delta') && typeof payload.delta === 'string'
+          ? payload.delta
+          : payload.choices?.[0]?.delta?.content ?? payload.choices?.[0]?.delta?.reasoning_content ?? payload.choices?.[0]?.delta?.reasoning ?? payload.choices?.[0]?.text ?? '';
+        if (anyFragment && timing && !timing.firstTokenAt) timing.firstTokenAt = performance.now();
         const fragment = payload.type === 'response.output_text.delta'
           ? payload.delta || ''
           : payload.choices?.[0]?.delta?.content ?? payload.choices?.[0]?.text ?? '';
         if (fragment) {
+          if (timing && !timing.firstVisibleAt) timing.firstVisibleAt = performance.now();
           output += fragment;
           updatePendingMessage(conversation, output);
+        }
+        const type = payload.type || '';
+        if (type === 'response.completed' || type === 'response.incomplete' || type === 'response.failed') {
+          usage = payload.response?.usage || payload.usage || payload.result?.usage || null;
         }
       });
     }
@@ -970,6 +1098,12 @@ async function requestCompletion(conversation, webContext = '', useExistingPendi
     if (message?.role === 'assistant') {
       message.content = output;
       delete message.pending;
+      if (message._timing) {
+        if (message._timing.firstTokenAt || usage) {
+          message.stats = computeStats(message, message._timing, usage);
+        }
+        delete message._timing;
+      }
     }
     conversation.updatedAt = new Date().toISOString();
     saveConversations();

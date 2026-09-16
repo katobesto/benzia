@@ -31,6 +31,18 @@ test('las claves pueden pausarse, reanudarse y revocarse definitivamente', async
   assert.equal(await store.setKeyPaused(created.id, false), null);
 });
 
+test('limita cada clave al proveedor local hasta habilitar expresamente los externos', async (t) => {
+  const testDir = await fs.mkdtemp(path.join(os.tmpdir(), 'benzIA-store-provider-access-'));
+  const store = new SqliteStore(testDir, 30);
+  t.after(async () => { store.close(); await fs.rm(testDir, { recursive: true, force: true }); });
+  await store.init();
+  const localOnly = await store.createKey('Solo local');
+  const external = await store.createKey('Con externos', { allowExternalProviders: true });
+  assert.equal(store.findKeyByToken(localOnly.token).allowExternalProviders, false);
+  assert.equal(store.findKeyByToken(external.token).allowExternalProviders, true);
+  assert.equal((await store.setKeyExternalAccess(localOnly.id, true)).allowExternalProviders, true);
+});
+
 test('añade el estado de pausa a una base SQLite existente sin perder claves', async (t) => {
   const testDir = await fs.mkdtemp(path.join(os.tmpdir(), 'benzIA-store-schema-'));
   const databasePath = path.join(testDir, 'gateway.sqlite');

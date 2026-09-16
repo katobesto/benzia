@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 
 import { searchBrave } from './brave-search.js';
 import { extractUsage } from './usage.js';
+import { routeForModel } from './providers.js';
 
 const MAX_MESSAGES = 12;
 const MAX_MESSAGE_CHARS = 1800;
@@ -62,13 +63,17 @@ async function planWithModel({ config, settings, model, messages, accessKey, sto
       { role: 'user', content: plannerPrompt(messages) }
     ]
   };
+  const externalRoute = routeForModel(model, settings.externalProviders);
+  const provider = externalRoute && accessKey.allowExternalProviders ? externalRoute.provider : null;
+  if (externalRoute && !provider) return fallbackPlan(messages);
+  if (provider) body.model = externalRoute.upstreamModel;
   try {
-    const response = await fetch(`${settings.upstreamBaseUrl}/v1/chat/completions`, {
+    const response = await fetch(`${provider?.baseUrl || settings.upstreamBaseUrl}/v1/chat/completions`, {
       method: 'POST',
       headers: {
         accept: 'application/json',
         'content-type': 'application/json',
-        ...(settings.upstreamApiKey ? { authorization: `Bearer ${settings.upstreamApiKey}` } : {})
+        ...((provider?.apiKey || settings.upstreamApiKey) ? { authorization: `Bearer ${provider?.apiKey || settings.upstreamApiKey}` } : {})
       },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(Math.min(config.requestTimeoutMs, 45_000))
@@ -99,7 +104,8 @@ export async function runResearch({ config, store, accessKey, model, messages, e
     upstreamBaseUrl: (stored.upstreamBaseUrl || config.upstreamBaseUrl).replace(/\/+$/, ''),
     upstreamApiKey: stored.upstreamApiKey ?? config.upstreamApiKey,
     braveSearchEndpoint: stored.braveSearchEndpoint || config.braveSearchEndpoint,
-    braveSearchApiKey: stored.braveSearchApiKey ?? config.braveSearchApiKey
+    braveSearchApiKey: stored.braveSearchApiKey ?? config.braveSearchApiKey,
+    externalProviders: Array.isArray(stored.externalProviders) ? stored.externalProviders : []
   };
   const safeMessages = normalizeResearchMessages(messages);
   if (!safeMessages.length) throw new Error('No hay contexto suficiente para investigar.');

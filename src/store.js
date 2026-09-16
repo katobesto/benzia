@@ -63,7 +63,8 @@ export class SqliteStore {
         paused_at TEXT,
         paused_message TEXT,
         revoked_at TEXT,
-        last_used_at TEXT
+        last_used_at TEXT,
+        allow_external_providers INTEGER NOT NULL DEFAULT 0
       );
       CREATE TABLE IF NOT EXISTS metrics (
         id TEXT PRIMARY KEY,
@@ -83,6 +84,7 @@ export class SqliteStore {
     const accessKeyColumns = new Set(this.db.prepare('PRAGMA table_info(access_keys)').all().map((column) => column.name));
     if (!accessKeyColumns.has('paused_at')) this.db.exec('ALTER TABLE access_keys ADD COLUMN paused_at TEXT');
     if (!accessKeyColumns.has('paused_message')) this.db.exec('ALTER TABLE access_keys ADD COLUMN paused_message TEXT');
+    if (!accessKeyColumns.has('allow_external_providers')) this.db.exec('ALTER TABLE access_keys ADD COLUMN allow_external_providers INTEGER NOT NULL DEFAULT 0');
     this.prepareStatements();
     await this.migrateLegacyJson();
     this.migrateStoredMetrics();
@@ -96,25 +98,26 @@ export class SqliteStore {
       ON CONFLICT(id) DO UPDATE SET data_json = excluded.data_json
     `);
     this.statements.keysList = this.db.prepare(`
-      SELECT id, name, prefix, created_at AS createdAt, paused_at AS pausedAt, paused_message AS pausedMessage, revoked_at AS revokedAt, last_used_at AS lastUsedAt
+      SELECT id, name, prefix, created_at AS createdAt, paused_at AS pausedAt, paused_message AS pausedMessage, revoked_at AS revokedAt, last_used_at AS lastUsedAt, allow_external_providers AS allowExternalProviders
       FROM access_keys ORDER BY created_at ASC
     `);
     this.statements.keyByHash = this.db.prepare(`
-      SELECT id, name, prefix, created_at AS createdAt, paused_at AS pausedAt, paused_message AS pausedMessage, revoked_at AS revokedAt, last_used_at AS lastUsedAt
+      SELECT id, name, prefix, created_at AS createdAt, paused_at AS pausedAt, paused_message AS pausedMessage, revoked_at AS revokedAt, last_used_at AS lastUsedAt, allow_external_providers AS allowExternalProviders
       FROM access_keys WHERE token_hash = ? AND paused_at IS NULL AND revoked_at IS NULL
     `);
     this.statements.keyByHashAnyState = this.db.prepare(`
-      SELECT id, name, prefix, created_at AS createdAt, paused_at AS pausedAt, paused_message AS pausedMessage, revoked_at AS revokedAt, last_used_at AS lastUsedAt
+      SELECT id, name, prefix, created_at AS createdAt, paused_at AS pausedAt, paused_message AS pausedMessage, revoked_at AS revokedAt, last_used_at AS lastUsedAt, allow_external_providers AS allowExternalProviders
       FROM access_keys WHERE token_hash = ?
     `);
     this.statements.keyInsert = this.db.prepare(`
-      INSERT INTO access_keys (id, name, prefix, token_hash, created_at, paused_at, paused_message, revoked_at, last_used_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO access_keys (id, name, prefix, token_hash, created_at, paused_at, paused_message, revoked_at, last_used_at, allow_external_providers)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     this.statements.keyPause = this.db.prepare('UPDATE access_keys SET paused_at = COALESCE(paused_at, ?), paused_message = ? WHERE id = ? AND revoked_at IS NULL');
     this.statements.keyResume = this.db.prepare('UPDATE access_keys SET paused_at = NULL WHERE id = ? AND revoked_at IS NULL');
     this.statements.keyRevoke = this.db.prepare('UPDATE access_keys SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL');
     this.statements.keyRename = this.db.prepare('UPDATE access_keys SET name = ? WHERE id = ?');
+    this.statements.keyExternalAccess = this.db.prepare('UPDATE access_keys SET allow_external_providers = ? WHERE id = ? AND revoked_at IS NULL');
     this.statements.keyTouch = this.db.prepare('UPDATE access_keys SET last_used_at = ? WHERE id = ?');
     this.statements.metricInsert = this.db.prepare(`
       INSERT INTO metrics (id, at, key_id, status, cache_status, input_tokens, output_tokens, latency_ms, data_json)
@@ -143,7 +146,8 @@ export class SqliteStore {
       for (const key of Array.isArray(parsed.keys) ? parsed.keys : []) {
         this.statements.keyInsert.run(
           key.id, key.name, key.prefix, key.tokenHash,
-          key.createdAt, key.pausedAt || null, key.pausedMessage || null, key.revokedAt || null, key.lastUsedAt || null
+          key.createdAt, key.pausedAt || null, key.pausedMessage || null, key.revokedAt || null, key.lastUsedAt || null,
+          key.allowExternalProviders ? 1 : 0
         );
       }
       for (const rawMetric of Array.isArray(parsed.metrics) ? parsed.metrics : []) {
@@ -226,17 +230,17 @@ export class SqliteStore {
   }
 
   listKeys() {
-    return this.statements.keysList.all().map((key) => ({ ...key }));
+    return this.statements.keysList.all().map((key) => ({ ...key, allowExternalProviders: Boolean(key.allowExternalProviders) }));
   }
 
   findKeyByToken(token, { includeInactive = false } = {}) {
     if (!token) return null;
     const statement = includeInactive ? this.statements.keyByHashAnyState : this.statements.keyByHash;
     const key = statement.get(hashToken(token));
-    return key ? { ...key } : null;
+    return key ? { ...key, allowExternalProviders: Boolean(key.allowExternalProviders) } : null;
   }
 
-  async createKey(name) {
+  async createKey(name, { allowExternalProviders = false } = {}) {
     const token = `lmg_${crypto.randomBytes(28).toString('base64url')}`;
     const key = {
       id: crypto.randomUUID(),
@@ -246,9 +250,10 @@ export class SqliteStore {
       pausedAt: null,
       pausedMessage: null,
       revokedAt: null,
-      lastUsedAt: null
+      lastUsedAt: null,
+      allowExternalProviders: Boolean(allowExternalProviders)
     };
-    this.statements.keyInsert.run(key.id, key.name, key.prefix, hashToken(token), key.createdAt, null, null, null, null);
+    this.statements.keyInsert.run(key.id, key.name, key.prefix, hashToken(token), key.createdAt, null, null, null, null, key.allowExternalProviders ? 1 : 0);
     return { ...key, token };
   }
 
@@ -266,6 +271,12 @@ export class SqliteStore {
 
   async renameKey(id, name) {
     const result = this.statements.keyRename.run(name, id);
+    if (Number(result.changes) === 0) return null;
+    return this.listKeys().find((key) => key.id === id) || null;
+  }
+
+  async setKeyExternalAccess(id, allowExternalProviders) {
+    const result = this.statements.keyExternalAccess.run(allowExternalProviders ? 1 : 0, id);
     if (Number(result.changes) === 0) return null;
     return this.listKeys().find((key) => key.id === id) || null;
   }

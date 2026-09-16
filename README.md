@@ -48,6 +48,12 @@ const response = await client.chat.completions.create({
 
 También se admite `x-api-key`. Todas las rutas `/v1/*` se reenvían a Proveedor IA Local, por lo que funcionan `/v1/models`, completions, embeddings y otros endpoints compatibles.
 
+### Proveedores externos
+
+En **Configuración → Proveedores externos** se pueden registrar hasta 20 servidores OpenAI-compatible con un nombre, un prefijo, su URL base y un token opcional. benzIA consulta dinámicamente el endpoint `/v1/models` de cada origen cuando un cliente solicita la lista de modelos. Los modelos locales conservan su identificador original y los externos se publican como `proveedor/modelo`; al usarlos, benzIA retira el prefijo y reenvía la petición y las credenciales al proveedor correspondiente.
+
+Cada clave de benzIA tiene un permiso independiente: **Solo proveedor local** o **Permitir proveedores externos**. Por seguridad, las claves existentes y las nuevas usan sólo el proveedor local de forma predeterminada. El permiso puede elegirse al crear la clave o cambiarse después desde **Claves API**. Los tokens de proveedores externos se almacenan únicamente en el servidor y nunca se devuelven al navegador.
+
 ## Chat web para usuarios
 
 `/chat` ofrece una interfaz de conversación para probar los modelos cargados en Proveedor IA Local. Cada usuario debe introducir una clave activa creada en **Claves API**. La pantalla valida esa clave antes de consultar `/v1/models` y cada respuesta se solicita a `/v1/responses` usando el endpoint público configurado en el dashboard.

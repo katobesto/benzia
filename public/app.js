@@ -4,6 +4,7 @@ const routes = {
   '/keys': 'keys',
   '/activity': 'activity',
   '/utilities': 'utilities',
+  '/server': 'server',
   '/settings': 'settings'
 };
 
@@ -33,6 +34,7 @@ function initializeRoute() {
 async function api(path, options = {}) {
   const response = await fetch(path, {
     ...options,
+    credentials: 'same-origin',
     headers: { 'content-type': 'application/json', 'x-admin-token': state.token, ...(options.headers || {}) }
   });
   if (response.status === 401) {
@@ -102,6 +104,11 @@ async function loadAll() {
   state.settings = settings;
   state.overview = overview || null;
   state.live = live;
+  if (pageName === 'server') {
+    await api('/admin/api/server-session', { method: 'POST', body: '{}' });
+    const frame = $('#server-frame');
+    if (frame && frame.dataset.src) frame.src = frame.dataset.src;
+  }
   renderKeyFilter();
   renderKeys();
   renderSettings();
@@ -279,7 +286,7 @@ function renderKeys() {
   $('#active-key-count').textContent = exactNumber.format(state.keys.filter((key) => !key.revokedAt && !key.pausedAt).length);
   $('#paused-key-count').textContent = exactNumber.format(state.keys.filter((key) => !key.revokedAt && key.pausedAt).length);
   const table = $('#keys-table');
-  if (!state.keys.length) { table.innerHTML = '<tr><td colspan="6" class="empty-cell">No hay claves. Usa “Crear nueva clave” para añadir la primera.</td></tr>'; return; }
+  if (!state.keys.length) { table.innerHTML = '<tr><td colspan="7" class="empty-cell">No hay claves. Usa “Crear nueva clave” para añadir la primera.</td></tr>'; return; }
   table.innerHTML = [...state.keys].reverse().map((key) => {
     const stateLabel = key.revokedAt ? 'Revocada' : key.pausedAt ? 'Pausada' : 'Activa';
     const stateClass = key.revokedAt ? 'revoked' : key.pausedAt ? 'paused' : '';
@@ -287,12 +294,21 @@ function renderKeys() {
       ? `<button class="row-action resume-key" data-id="${escapeHtml(key.id)}" type="button">Reanudar</button><button class="row-action edit-pause-message" data-id="${escapeHtml(key.id)}" type="button">Editar aviso</button>`
       : `<button class="row-action pause-key" data-id="${escapeHtml(key.id)}" type="button">Pausar</button>`;
     const actions = key.revokedAt ? '' : `<div class="row-actions">${accessAction}<button class="row-action revoke-key" data-id="${escapeHtml(key.id)}" data-name="${escapeHtml(key.name)}" type="button">Revocar</button></div>`;
-    return `<tr><td><strong>${escapeHtml(key.name)}</strong></td><td><code>${escapeHtml(key.prefix)}••••</code></td><td>${dateTime.format(new Date(key.createdAt))}</td><td>${key.lastUsedAt ? dateTime.format(new Date(key.lastUsedAt)) : 'Nunca'}</td><td><span class="state-pill ${stateClass}">${stateLabel}</span></td><td>${actions}</td></tr>`;
+    const providerAccess = `<select class="key-provider-access" data-id="${escapeHtml(key.id)}" aria-label="Acceso a proveedores de ${escapeHtml(key.name)}" ${key.revokedAt ? 'disabled' : ''}><option value="local" ${!key.allowExternalProviders ? 'selected' : ''}>Solo proveedor local</option><option value="external" ${key.allowExternalProviders ? 'selected' : ''}>Permitir externos</option></select>`;
+    return `<tr><td><strong>${escapeHtml(key.name)}</strong></td><td><code>${escapeHtml(key.prefix)}••••</code></td><td>${dateTime.format(new Date(key.createdAt))}</td><td>${key.lastUsedAt ? dateTime.format(new Date(key.lastUsedAt)) : 'Nunca'}</td><td>${providerAccess}</td><td><span class="state-pill ${stateClass}">${stateLabel}</span></td><td>${actions}</td></tr>`;
   }).join('');
   table.querySelectorAll('.pause-key').forEach((button) => button.addEventListener('click', () => openPauseDialog(button.dataset.id, false)));
   table.querySelectorAll('.edit-pause-message').forEach((button) => button.addEventListener('click', () => openPauseDialog(button.dataset.id, true)));
   table.querySelectorAll('.resume-key').forEach((button) => button.addEventListener('click', () => resumeKey(button.dataset.id)));
   table.querySelectorAll('.revoke-key').forEach((button) => button.addEventListener('click', () => revokeKey(button.dataset.id, button.dataset.name)));
+  table.querySelectorAll('.key-provider-access').forEach((select) => select.addEventListener('change', async () => {
+    select.disabled = true;
+    try {
+      await api(`/admin/api/keys/${encodeURIComponent(select.dataset.id)}/providers`, { method: 'PATCH', body: JSON.stringify({ allowExternalProviders: select.value === 'external' }) });
+      toast(select.value === 'external' ? 'Proveedores externos habilitados' : 'Acceso limitado al proveedor local');
+      await loadAll();
+    } catch (error) { toast(error.message); select.disabled = false; }
+  }));
 }
 
 function renderActivity(items = []) {
@@ -333,6 +349,35 @@ function renderSettings() {
     : 'No disponible';
   $('#retention-settings').textContent = `${settings.retentionDays} días`;
   $('#tunnel-origin').textContent = `http://localhost:${settings.gatewayPort}`;
+  settings.externalProviders = (settings.externalProviders || []).map((provider) => ({ ...provider, originalId: provider.id, apiKey: provider.apiKey || '', status: provider.status || null }));
+  renderExternalProviders();
+}
+
+function createExternalProvider() {
+  const number = (state.settings.externalProviders?.length || 0) + 1;
+  return { id: `externo-${number}`, originalId: '', name: `Proveedor externo ${number}`, baseUrl: '', apiKey: '', hasApiKey: false, status: null };
+}
+
+function renderExternalProviders() {
+  const container = $('#external-providers');
+  const providers = state.settings?.externalProviders || [];
+  if (!providers.length) {
+    container.innerHTML = '<div class="external-provider-empty">No hay proveedores externos configurados. El proveedor local seguirá funcionando con normalidad.</div>';
+    return;
+  }
+  container.innerHTML = providers.map((provider, index) => {
+    const status = provider.status ? `<span class="utility-status ${provider.status.online ? 'online' : 'offline'}">${escapeHtml(provider.status.message)}</span>` : '';
+    return `<article class="external-provider" data-provider-index="${index}">
+      <div class="external-provider-head"><div><span class="provider-sequence">EXT ${String(index + 1).padStart(2, '0')}</span><strong>${escapeHtml(provider.name || `Proveedor ${index + 1}`)}</strong></div><div>${status}<button class="row-action remove-external-provider" type="button">Eliminar</button></div></div>
+      <div class="form-grid external-provider-grid">
+        <label><span class="external-field-title">Nombre visible</span><input data-external-field="name" value="${escapeHtml(provider.name)}" maxlength="80" required placeholder="OpenAI"></label>
+        <label><span class="external-field-title">ID / prefijo</span><input data-external-field="id" value="${escapeHtml(provider.id)}" maxlength="50" pattern="[a-z0-9][a-z0-9_-]*" required placeholder="openai"><small>Los modelos se publican como <code>${escapeHtml(provider.id || 'proveedor')}/modelo</code>.</small></label>
+        <label><span class="external-field-title">URL OpenAI-compatible</span><input data-external-field="baseUrl" type="url" value="${escapeHtml(provider.baseUrl)}" required placeholder="https://api.openai.com"><small>Acepta la URL base con o sin <code>/v1</code>.</small></label>
+        <label><span class="external-field-title">Token del proveedor <span class="optional">Opcional</span></span><input data-external-field="apiKey" type="password" value="" autocomplete="new-password" placeholder="${provider.hasApiKey ? 'Configurado · vacío para conservar' : 'Sin autenticación'}"><small>Se guarda sólo en el servidor.</small></label>
+      </div>
+      <div class="external-provider-tools"><button class="secondary-button test-external-provider" type="button">Probar y consultar modelos</button><span>benzIA consultará <code>GET /v1/models</code> dinámicamente</span></div>
+    </article>`;
+  }).join('');
 }
 
 function updateEndpointPreview() {
@@ -624,7 +669,22 @@ $('#auth-form').addEventListener('submit', async (event) => {
   catch (error) { message.textContent = error.message; message.classList.add('error'); }
 });
 
-$('#logout-button').addEventListener('click', () => { localStorage.removeItem(ADMIN_TOKEN_KEY); sessionStorage.removeItem(ADMIN_TOKEN_KEY); state.token = ''; $('#admin-token').value = ''; showAuth(); });
+$('#logout-button').addEventListener('click', async () => { try { await api('/admin/api/server-session', { method: 'DELETE' }); } catch { /* La sesión administrativa puede haber expirado. */ } localStorage.removeItem(ADMIN_TOKEN_KEY); sessionStorage.removeItem(ADMIN_TOKEN_KEY); state.token = ''; $('#admin-token').value = ''; showAuth(); });
+
+document.querySelector('[data-route="server"]')?.addEventListener('click', async (event) => {
+  event.preventDefault();
+  $$('[data-page]').forEach((page) => page.classList.toggle('active', page.dataset.page === 'server'));
+  $$('.nav-link').forEach((link) => link.classList.toggle('active', link.dataset.route === 'server'));
+  $('#breadcrumb-page').textContent = 'SERVER';
+  document.title = 'Servidor · benzIA';
+  try {
+    await api('/admin/api/server-session', { method: 'POST', body: '{}' });
+    const frame = $('#server-frame');
+    if (frame?.dataset.src && frame.src !== new URL(frame.dataset.src, window.location.href).href) frame.src = frame.dataset.src;
+  } catch (error) {
+    toast(error.message);
+  }
+});
 $('#range-filter').addEventListener('change', () => pageName === 'dashboard' && refreshOverview());
 $('#from-date').addEventListener('change', () => pageName === 'dashboard' && refreshOverview());
 $('#to-date').addEventListener('change', () => pageName === 'dashboard' && refreshOverview());
@@ -647,7 +707,7 @@ $$('[data-open-key-dialog]').forEach((button) => button.addEventListener('click'
 $('#key-form').addEventListener('submit', async (event) => {
   if (event.submitter?.value === 'cancel') return;
   event.preventDefault();
-  try { const payload = await api('/admin/api/keys', { method: 'POST', body: JSON.stringify({ name: $('#key-name').value }) }); $('#key-dialog').close(); $('#created-token').textContent = payload.key.token; $('#token-dialog').showModal(); await loadAll(); }
+  try { const payload = await api('/admin/api/keys', { method: 'POST', body: JSON.stringify({ name: $('#key-name').value, allowExternalProviders: $('#key-provider-access').value === 'external' }) }); $('#key-dialog').close(); $('#created-token').textContent = payload.key.token; $('#token-dialog').showModal(); await loadAll(); }
   catch (error) { $('#key-message').textContent = error.message; }
 });
 $('#pause-form').addEventListener('submit', async (event) => {
@@ -678,6 +738,34 @@ $('#close-token-dialog').addEventListener('click', () => $('#token-dialog').clos
 $('#token-saved').addEventListener('click', () => $('#token-dialog').close());
 $('#copy-endpoint').addEventListener('click', async () => { await navigator.clipboard.writeText($('#gateway-url').textContent); toast('Endpoint copiado'); });
 $('#public-gateway-url').addEventListener('input', updateEndpointPreview);
+$('#add-external-provider').addEventListener('click', () => { state.settings.externalProviders.push(createExternalProvider()); renderExternalProviders(); });
+$('#external-providers').addEventListener('input', (event) => {
+  const card = event.target.closest('.external-provider');
+  const field = event.target.dataset.externalField;
+  const provider = state.settings.externalProviders[Number(card?.dataset.providerIndex)];
+  if (!provider || !field) return;
+  provider[field] = event.target.value;
+  if (field === 'name') card.querySelector('.external-provider-head strong').textContent = event.target.value || 'Proveedor externo';
+});
+$('#external-providers').addEventListener('click', async (event) => {
+  const card = event.target.closest('.external-provider');
+  const index = Number(card?.dataset.providerIndex);
+  const provider = state.settings.externalProviders[index];
+  if (!provider) return;
+  if (event.target.closest('.remove-external-provider')) {
+    state.settings.externalProviders.splice(index, 1);
+    renderExternalProviders();
+    return;
+  }
+  if (!event.target.closest('.test-external-provider')) return;
+  provider.status = { online: false, message: 'Consultando…' };
+  renderExternalProviders();
+  try {
+    const result = await api('/admin/api/external-providers/test', { method: 'POST', body: JSON.stringify(provider) });
+    provider.status = { online: true, message: `${result.models.length} modelo(s) · ${result.latencyMs} ms` };
+  } catch (error) { provider.status = { online: false, message: error.message }; }
+  renderExternalProviders();
+});
 $('#settings-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   const message = $('#settings-message'); message.className = 'form-message'; message.textContent = 'Guardando cambios…';
@@ -688,6 +776,7 @@ $('#settings-form').addEventListener('submit', async (event) => {
       upstreamBaseUrl: $('#upstream-url').value,
       publicGatewayUrl: $('#public-gateway-url').value,
       braveSearchEndpoint: $('#brave-search-endpoint').value,
+      externalProviders: (state.settings.externalProviders || []).map((provider) => ({ id: provider.id, originalId: provider.originalId, name: provider.name, baseUrl: provider.baseUrl, apiKey: provider.apiKey, keepApiKey: provider.hasApiKey && !provider.apiKey })),
       ...(upstreamApiKey ? { upstreamApiKey } : {}),
       ...(braveSearchApiKey ? { braveSearchApiKey } : {})
     }) });

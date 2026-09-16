@@ -22,6 +22,7 @@ export function loadConfig() {
     publicGatewayUrl: normalizeBaseUrl(process.env.PUBLIC_GATEWAY_URL || `http://localhost:${process.env.GATEWAY_PORT || 3401}`),
     upstreamBaseUrl: normalizeBaseUrl(process.env.LM_STUDIO_BASE_URL || 'http://127.0.0.1:1234'),
     upstreamApiKey: process.env.LM_STUDIO_API_KEY || '',
+    serverProxyTarget: 'http://127.0.0.1:4000',
     llamaCppLogPath: process.env.LLAMA_CPP_LOG_PATH || '',
     braveSearchEndpoint: normalizeBraveEndpoint(process.env.BRAVE_SEARCH_ENDPOINT || DEFAULT_BRAVE_SEARCH_ENDPOINT),
     braveSearchApiKey: process.env.BRAVE_SEARCH_API_KEY || '',

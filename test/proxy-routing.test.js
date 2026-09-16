@@ -209,6 +209,73 @@ test('reenvía sin alterar mensajes multimodales a Proveedor IA Local', async (t
   assert.deepEqual(receivedBody.messages[0].content, multimodalContent);
 });
 
+test('agrega modelos externos sólo para claves autorizadas y enruta el modelo prefijado', async (t) => {
+  const local = express();
+  local.get('/v1/models', (_req, res) => res.json({ object: 'list', data: [{ id: 'modelo-local', object: 'model' }] }));
+  const localServer = local.listen(0, '127.0.0.1');
+  await new Promise((resolve) => localServer.once('listening', resolve));
+  t.after(() => new Promise((resolve) => localServer.close(resolve)));
+
+  let externalAuthorization = '';
+  let externalBody;
+  const external = express();
+  external.use(express.json());
+  external.get('/v1/models', (req, res) => {
+    externalAuthorization = req.get('authorization') || '';
+    res.json({ object: 'list', data: [{ id: 'org/modelo-cloud', object: 'model', created: 123 }] });
+  });
+  external.post('/v1/chat/completions', (req, res) => {
+    externalAuthorization = req.get('authorization') || '';
+    externalBody = req.body;
+    res.json({ choices: [{ message: { content: 'Desde cloud' } }], usage: { prompt_tokens: 2, completion_tokens: 2 } });
+  });
+  const externalServer = external.listen(0, '127.0.0.1');
+  await new Promise((resolve) => externalServer.once('listening', resolve));
+  t.after(() => new Promise((resolve) => externalServer.close(resolve)));
+
+  const metrics = [];
+  const store = {
+    getSettings: () => ({ externalProviders: [{ id: 'cloud', name: 'Cloud IA', baseUrl: `http://127.0.0.1:${externalServer.address().port}`, apiKey: 'cloud-secret' }] }),
+    findKeyByToken: (token) => token === 'external-key'
+      ? { id: 'external', name: 'Externo', allowExternalProviders: true }
+      : { id: 'local', name: 'Local', allowExternalProviders: false },
+    recordMetric: async (metric) => metrics.push(metric)
+  };
+  const gateway = createGatewayApp({
+    config: { upstreamBaseUrl: `http://127.0.0.1:${localServer.address().port}`, upstreamApiKey: '', requestTimeoutMs: 5000 },
+    store
+  });
+  const gatewayServer = gateway.listen(0, '127.0.0.1');
+  await new Promise((resolve) => gatewayServer.once('listening', resolve));
+  t.after(() => new Promise((resolve) => gatewayServer.close(resolve)));
+  const baseUrl = `http://127.0.0.1:${gatewayServer.address().port}/v1`;
+
+  const localModelsResponse = await fetch(`${baseUrl}/models`, { headers: { authorization: 'Bearer local-key' } });
+  assert.deepEqual((await localModelsResponse.json()).data.map((model) => model.id), ['modelo-local']);
+
+  const allModelsResponse = await fetch(`${baseUrl}/models`, { headers: { authorization: 'Bearer external-key' } });
+  const allModels = (await allModelsResponse.json()).data;
+  assert.deepEqual(allModels.map((model) => model.id), ['modelo-local', 'cloud/org/modelo-cloud']);
+  assert.equal(allModels[1].owned_by, 'Cloud IA');
+  assert.equal(externalAuthorization, 'Bearer cloud-secret');
+
+  const forbidden = await fetch(`${baseUrl}/chat/completions`, {
+    method: 'POST', headers: { authorization: 'Bearer local-key', 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'cloud/org/modelo-cloud', messages: [] })
+  });
+  assert.equal(forbidden.status, 403);
+
+  const completion = await fetch(`${baseUrl}/chat/completions`, {
+    method: 'POST', headers: { authorization: 'Bearer external-key', 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'cloud/org/modelo-cloud', messages: [{ role: 'user', content: 'Hola' }] })
+  });
+  assert.equal(completion.status, 200);
+  assert.equal(externalBody.model, 'org/modelo-cloud');
+  assert.equal(externalAuthorization, 'Bearer cloud-secret');
+  assert.equal(metrics[0].model, 'cloud/org/modelo-cloud');
+  assert.equal(metrics[0].provider, 'cloud');
+});
+
 test('registra la telemetría final del proveedor en streaming', async (t) => {
   const upstream = express();
   upstream.use(express.json());

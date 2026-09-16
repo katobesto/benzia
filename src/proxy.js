@@ -4,10 +4,11 @@ import cors from 'cors';
 import express from 'express';
 
 import { extractAccessToken, PAUSED_TOKEN_MESSAGE } from './access-auth.js';
+import { fetchProviderModels, routeForModel } from './providers.js';
 import { extractOutputText, extractUpstreamTelemetry, extractUsage } from './usage.js';
 
 const INFERENCE_PATHS = new Set(['/v1/chat/completions', '/v1/completions', '/v1/responses', '/v1/embeddings']);
-const DASHBOARD_PATHS = new Set(['/dashboard', '/keys', '/activity', '/settings', '/utilities', '/styles.css', '/app.js', '/favicon.ico']);
+const DASHBOARD_PATHS = new Set(['/dashboard', '/keys', '/activity', '/settings', '/utilities', '/server', '/styles.css', '/app.js', '/favicon.ico']);
 
 const safeError = (status, message, type = 'gateway_error') => ({
   error: { message, type, code: type, param: null }
@@ -123,7 +124,8 @@ export function createGatewayApp({ config, store, adminApp, chatApp, liveActivit
   // y las operaciones de /admin/api siguen protegidos dentro de adminApp.
   app.use((req, res, next) => {
     const isAdminApi = req.path === '/admin/api' || req.path.startsWith('/admin/api/');
-    if (adminApp && (DASHBOARD_PATHS.has(req.path) || isAdminApi)) {
+    const isServerProxy = req.path === '/server' || req.path.startsWith('/server/');
+    if (adminApp && (DASHBOARD_PATHS.has(req.path) || isAdminApi || isServerProxy)) {
       return adminApp.handle(req, res, next);
     }
     return next();
@@ -139,7 +141,8 @@ export function createGatewayApp({ config, store, adminApp, chatApp, liveActivit
     const stored = store.getSettings();
     return {
       upstreamBaseUrl: (stored.upstreamBaseUrl || config.upstreamBaseUrl).replace(/\/+$/, ''),
-      upstreamApiKey: stored.upstreamApiKey ?? config.upstreamApiKey
+      upstreamApiKey: stored.upstreamApiKey ?? config.upstreamApiKey,
+      externalProviders: Array.isArray(stored.externalProviders) ? stored.externalProviders : []
     };
   };
 
@@ -162,8 +165,46 @@ export function createGatewayApp({ config, store, adminApp, chatApp, liveActivit
     }
 
     const settings = effectiveSettings();
-    const upstreamUrl = `${settings.upstreamBaseUrl}${req.originalUrl}`;
+    if (req.method === 'GET' && path === '/v1/models') {
+      const localProvider = { baseUrl: settings.upstreamBaseUrl, apiKey: settings.upstreamApiKey };
+      const providers = accessKey.allowExternalProviders ? settings.externalProviders : [];
+      const results = await Promise.allSettled([
+        fetchProviderModels(localProvider, { timeoutMs: Math.min(config.requestTimeoutMs, 8000) }),
+        ...providers.map((provider) => fetchProviderModels(provider, { timeoutMs: Math.min(config.requestTimeoutMs, 8000) }))
+      ]);
+      const hasAnyModelsResponse = results.some((result) => result.status === 'fulfilled');
+      if (!hasAnyModelsResponse) {
+        return res.status(502).json(safeError(502, `No se pudo consultar el proveedor local: ${results[0].reason?.message || 'sin conexión'}.`, 'upstream_unavailable'));
+      }
+      const localModels = results[0].status === 'fulfilled' ? results[0].value : [];
+      const externalModels = providers.flatMap((provider, index) => {
+        const result = results[index + 1];
+        if (result.status !== 'fulfilled') return [];
+        return result.value.map((model) => ({
+          ...model,
+          id: `${provider.id}/${model.id}`,
+          owned_by: provider.name,
+          benzIA_provider: { id: provider.id, name: provider.name, external: true }
+        }));
+      });
+      const failed = [
+        ...(results[0].status === 'rejected' ? ['local'] : []),
+        ...providers.filter((_provider, index) => results[index + 1].status === 'rejected').map((provider) => provider.id)
+      ];
+      if (failed.length) res.set('x-benzia-provider-errors', failed.join(','));
+      return res.json({ object: 'list', data: [...localModels, ...externalModels] });
+    }
+
+    const externalRoute = routeForModel(body?.model, settings.externalProviders);
+    if (externalRoute && !accessKey.allowExternalProviders) {
+      return res.status(403).json(safeError(403, 'Este token sólo puede utilizar el proveedor local.', 'external_provider_forbidden'));
+    }
+    const selectedProvider = externalRoute?.provider || {
+      id: 'local', name: 'Proveedor IA Local', baseUrl: settings.upstreamBaseUrl, apiKey: settings.upstreamApiKey
+    };
+    const upstreamUrl = `${selectedProvider.baseUrl}${req.originalUrl}`;
     const upstreamBody = body ? structuredClone(body) : undefined;
+    if (externalRoute && upstreamBody) upstreamBody.model = externalRoute.upstreamModel;
     if (upstreamBody?.stream && path === '/v1/chat/completions') {
       upstreamBody.stream_options = { ...upstreamBody.stream_options, include_usage: true };
     }
@@ -189,7 +230,7 @@ export function createGatewayApp({ config, store, adminApp, chatApp, liveActivit
         headers: {
           accept: req.get('accept') || '*/*',
           ...(upstreamBody ? { 'content-type': 'application/json' } : {}),
-          ...(settings.upstreamApiKey ? { authorization: `Bearer ${settings.upstreamApiKey}` } : {})
+          ...(selectedProvider.apiKey ? { authorization: `Bearer ${selectedProvider.apiKey}` } : {})
         },
         body: upstreamBody ? JSON.stringify(upstreamBody) : undefined,
         signal: controller.signal
@@ -200,11 +241,11 @@ export function createGatewayApp({ config, store, adminApp, chatApp, liveActivit
       const timedOut = controller.signal.aborted;
       const status = timedOut ? 504 : 502;
       const message = timedOut
-        ? 'Proveedor IA Local no respondió dentro del tiempo configurado.'
-        : `No se pudo conectar con Proveedor IA Local: ${error.message}`;
+        ? `${selectedProvider.name} no respondió dentro del tiempo configurado.`
+        : `No se pudo conectar con ${selectedProvider.name}: ${error.message}`;
       await store.recordMetric({
         id: requestId, at: new Date().toISOString(), keyId: accessKey.id, path,
-        model: body?.model || null, status, latencyMs: Date.now() - startedAt,
+        model: body?.model || null, provider: selectedProvider.id, status, latencyMs: Date.now() - startedAt,
         inputTokens: 0, outputTokens: 0, usageSource: 'unavailable',
         lmCachedInputTokens: null, lmCacheSource: 'unavailable',
         tokensPerSecond: null, throughputSource: 'unavailable',
@@ -268,7 +309,7 @@ export function createGatewayApp({ config, store, adminApp, chatApp, liveActivit
       liveActivity?.finish(requestId);
       await store.recordMetric({
         id: requestId, at: new Date().toISOString(), keyId: accessKey.id, path,
-        model: body?.model || null, status: upstream.status, latencyMs: completedAt - startedAt,
+        model: body?.model || null, provider: selectedProvider.id, status: upstream.status, latencyMs: completedAt - startedAt,
         ...usage, ...telemetry, stream: true
       });
       return;
@@ -287,7 +328,7 @@ export function createGatewayApp({ config, store, adminApp, chatApp, liveActivit
     res.send(responseBuffer);
     await store.recordMetric({
       id: requestId, at: new Date().toISOString(), keyId: accessKey.id, path,
-      model: body?.model || null, status: upstream.status, latencyMs: Date.now() - startedAt,
+      model: body?.model || null, provider: selectedProvider.id, status: upstream.status, latencyMs: Date.now() - startedAt,
       ...usage, ...telemetry, stream: false
     });
   });
