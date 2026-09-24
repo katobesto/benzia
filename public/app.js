@@ -101,6 +101,7 @@ function localDateBoundary(value, endOfDay = false) {
 function overviewQuery() {
   const activity = pageName === 'activity';
   const keyId = $(activity ? '#activity-key-filter' : '#key-filter').value;
+  const model = activity ? '' : ($('#model-filter') ? $('#model-filter').value : '');
   const from = $(activity ? '#activity-from-date' : '#from-date').value;
   const to = $(activity ? '#activity-to-date' : '#to-date').value;
   const hours = $(activity ? '#activity-range' : '#range-filter').value;
@@ -109,7 +110,7 @@ function overviewQuery() {
   const range = fromBoundary || toBoundary
     ? `${fromBoundary ? `from=${encodeURIComponent(fromBoundary)}` : ''}${toBoundary ? `${fromBoundary ? '&' : ''}to=${encodeURIComponent(toBoundary)}` : ''}`
     : `hours=${encodeURIComponent(hours)}`;
-  return `${range}${keyId ? `&keyId=${encodeURIComponent(keyId)}` : ''}`;
+  return `${range}${keyId ? `&keyId=${encodeURIComponent(keyId)}` : ''}${model ? `&model=${encodeURIComponent(model)}` : ''}`;
 }
 
 async function loadAll() {
@@ -177,10 +178,23 @@ function renderKeyFilter() {
     return `<option value="${escapeHtml(key.id)}">${escapeHtml(key.name)} · ${escapeHtml(key.prefix)}…${stateLabel}</option>`;
   }).join('');
   if ([...activitySelect.options].some((option) => option.value === activitySelected)) activitySelect.value = activitySelected;
-}
+  }
+
+  function renderModelFilter(models) {
+    const select = $('#model-filter');
+    if (!select) return;
+    const selected = select.value;
+    const options = (Array.isArray(models) ? models : []).map((entry) => {
+      const name = entry.model || 'sin modelo';
+      return `<option value="${escapeHtml(entry.model || '')}">${escapeHtml(name)}${entry.count ? ` · ${escapeHtml(String(entry.count))}` : ''}</option>`;
+    }).join('');
+    select.innerHTML = '<option value="">Todos los modelos</option>' + options;
+    if ([...select.options].some((option) => option.value === selected)) select.value = selected;
+  }
 
 function renderOverview() {
-  const { totals, timeline, byKey, recent } = state.overview;
+  const { totals, timeline, byKey, recent, models } = state.overview;
+  renderModelFilter(models);
   $('#metric-total-tokens').textContent = compactNumber.format(totals.inputTokens + totals.outputTokens);
   $('#metric-input').textContent = compactNumber.format(totals.inputTokens);
   $('#metric-output').textContent = compactNumber.format(totals.outputTokens);
@@ -795,6 +809,7 @@ document.querySelector('[data-route="server"]')?.addEventListener('click', async
   }
 });
 $('#range-filter').addEventListener('change', () => pageName === 'dashboard' && refreshOverview());
+$('#model-filter').addEventListener('change', () => pageName === 'dashboard' && refreshOverview());
 $('#from-date').addEventListener('change', () => pageName === 'dashboard' && refreshOverview());
 $('#to-date').addEventListener('change', () => pageName === 'dashboard' && refreshOverview());
 $('#clear-date-filter').addEventListener('click', () => { $('#from-date').value = ''; $('#to-date').value = ''; if (pageName === 'dashboard') refreshOverview(); });

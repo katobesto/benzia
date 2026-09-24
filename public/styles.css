@@ -410,9 +410,13 @@ html { overflow-x: hidden; }
     /* Filtros: una columna a ancho completo (evita el flex justify-end que los
        dejaba a la mitad derecha con hueco vacío a la izquierda). */
     .filters { display: grid; grid-template-columns: 1fr; gap: 10px; width: 100%; align-items: stretch; justify-content: stretch; }
-    .filters label { width: 100%; min-width: 0; }
-    .activity-filters label:first-child { width: 100%; }
-    .filters select, .filters input[type="date"] { width: 100%; min-width: 0; }
+    .filters label { width: 100%; min-width: 0; grid-template-columns: minmax(0, 1fr); }
+        .activity-filters label:first-child { width: 100%; grid-template-columns: minmax(0, 1fr); }
+        /* La pista del label era 'auto' (implícita): el control de fecha nativo
+           tiene ancho intrínseco y en iOS inflaba el campo más allá de la pantalla.
+           minmax(0,1fr) hace la pista definitiva (limitada al ancho del contenedor)
+           y 'max-width:100%' lo ancla. */
+        .filters select, .filters input[type="date"] { width: 100%; max-width: 100%; min-width: 0; }
     .filter-clear { grid-column: 1; width: 100%; }
     /* Evita el zoom automático de iOS al tocar un campo (fuente >= 16px). */
     input, select, textarea { font-size: 16px; }

@@ -12,6 +12,7 @@ function parseDateValue(value, endOfDay = false) {
 export function buildOverviewPayload(store, query = {}) {
   const hours = Math.min(24 * 90, Math.max(1, Number.parseInt(query.hours || '24', 10)));
   const keyId = typeof query.keyId === 'string' ? query.keyId : undefined;
+  const model = typeof query.model === 'string' && query.model ? query.model : undefined;
   const hasDateRange = 'from' in query || 'to' in query;
   const requestedFrom = parseDateValue(query.from);
   const requestedTo = parseDateValue(query.to, true);
@@ -25,10 +26,11 @@ export function buildOverviewPayload(store, query = {}) {
   const from = fromDate.toISOString();
   const to = toDate.toISOString();
   const keys = store.listKeys();
-  const metrics = store.getMetrics({ from, to, keyId, limit: 50000 });
+  const metrics = store.getMetrics({ from, to, keyId, model, limit: 50000 });
   return {
     payload: {
       range: { from, to, hours: rangeHours },
+      models: store.getModels({ from, to, keyId }),
       ...summarizeMetrics(metrics, keys, rangeHours > 72 ? 'day' : 'hour'),
       recent: metrics.slice(-20).reverse()
     }

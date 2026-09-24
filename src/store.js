@@ -328,16 +328,36 @@ export class SqliteStore {
     }
   }
 
-  getMetrics({ from, to, keyId, limit = 5000 } = {}) {
+  getMetrics({ from, to, keyId, model, limit = 5000 } = {}) {
     const conditions = [];
     const params = [];
     if (from) { conditions.push('at >= ?'); params.push(from); }
     if (to) { conditions.push('at <= ?'); params.push(to); }
     if (keyId) { conditions.push('key_id = ?'); params.push(keyId); }
+    if (model) { conditions.push(`json_extract(data_json, '$.model') = ?`); params.push(model); }
     const safeLimit = Math.min(50000, Math.max(1, Number(limit) || 5000));
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
     const rows = this.db.prepare(`SELECT data_json FROM metrics ${where} ORDER BY at DESC LIMIT ?`).all(...params, safeLimit);
     return rows.reverse().map((row) => JSON.parse(row.data_json));
+  }
+
+  // Modelos distintos usados en el periodo (no aplica el filtro de modelo,
+  // para que el select del dashboard se pueble con todos los disponibles).
+  getModels({ from, to, keyId } = {}) {
+    const conditions = [];
+    const params = [];
+    if (from) { conditions.push('at >= ?'); params.push(from); }
+    if (to) { conditions.push('at <= ?'); params.push(to); }
+    if (keyId) { conditions.push('key_id = ?'); params.push(keyId); }
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const rows = this.db.prepare(
+      `SELECT json_extract(data_json, '$.model') AS model, COUNT(*) AS count
+       FROM metrics ${where}
+       GROUP BY 1
+       HAVING model IS NOT NULL
+       ORDER BY count DESC, model ASC`
+    ).all(...params);
+    return rows.map((row) => ({ model: row.model, count: Number(row.count) }));
   }
 
   storageStats() {

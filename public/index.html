@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
   <title>benzIA Console</title>
-  <link rel="stylesheet" href="/styles.css?v=4">
+  <link rel="stylesheet" href="/styles.css?v=5">
 </head>
 <body>
   <div class="app-shell">
@@ -36,7 +36,7 @@
       <section class="page" data-page="dashboard">
         <div class="page-heading">
           <div><p class="overline">RESUMEN OPERATIVO</p><h1>Dashboard</h1><p>Uso, rendimiento y eficiencia del gateway en tiempo real.</p></div>
-          <div class="filters"><label>Clave API<select id="key-filter"><option value="">Todas las claves</option></select></label><label>Periodo<select id="range-filter"><option value="6">6 horas</option><option value="24" selected>24 horas</option><option value="168">7 días</option><option value="720">30 días</option></select></label><label>Desde<input id="from-date" type="date" aria-label="Fecha inicial"></label><label>Hasta<input id="to-date" type="date" aria-label="Fecha final"></label><button class="secondary-button filter-clear" id="clear-date-filter" type="button">Limpiar fechas</button></div>
+          <div class="filters"><label>Clave API<select id="key-filter"><option value="">Todas las claves</option></select></label><label>Modelo<select id="model-filter"><option value="">Todos los modelos</option></select></label><label>Periodo<select id="range-filter"><option value="6">6 horas</option><option value="24" selected>24 horas</option><option value="168">7 días</option><option value="720">30 días</option></select></label><label>Desde<input id="from-date" type="date" aria-label="Fecha inicial"></label><label>Hasta<input id="to-date" type="date" aria-label="Fecha final"></label><button class="secondary-button filter-clear" id="clear-date-filter" type="button">Limpiar fechas</button></div>
         </div>
         <div class="metrics-grid">
           <article class="metric-card"><div class="metric-label"><span>Tokens totales</span><i class="metric-icon cyan">T</i></div><strong id="metric-total-tokens">0</strong><div class="metric-detail"><span><i class="legend-dot input-dot"></i><b id="metric-input">0</b> entrada</span><span><i class="legend-dot output-dot"></i><b id="metric-output">0</b> salida</span></div></article>
@@ -114,6 +114,6 @@
   <dialog id="pause-dialog"><form method="dialog" class="dialog-card pause-card" id="pause-form"><button class="dialog-close" value="cancel" type="submit" aria-label="Cerrar">×</button><div class="dialog-icon pause-icon">Ⅱ</div><p class="overline">ACCESO EN PAUSA</p><h2 id="pause-dialog-title">Pausar clave</h2><p id="pause-dialog-copy">El usuario recibirá este aviso como respuesta del asistente.</p><label>Mensaje para el usuario<textarea id="pause-message" maxlength="500"></textarea><small id="pause-message-count">0 / 500</small></label><div class="pause-dialog-actions"><button class="secondary-button" id="pause-default" type="button">Usar predeterminado</button><button class="primary-button" id="pause-submit" type="submit">Pausar clave</button></div><p class="form-message" id="pause-message-error" aria-live="polite"></p></form></dialog>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
   <dialog id="provider-dialog"><form method="dialog" class="dialog-card provider-filter-card" id="provider-filter-form"><button class="dialog-close" value="cancel" type="submit" aria-label="Cerrar">×</button><div class="dialog-icon">⇄</div><p class="overline">PROVEEDORES EXTERNOS</p><h2 id="provider-filter-key-name">Proveedores visibles</h2><p>Marca los proveedores externos que esta clave podrá ver. La selección actúa como filtro: solo se muestran si también están disponibles en benzIA.</p><div id="provider-filter-list" class="provider-filter-list"></div><button class="primary-button wide" value="default" type="submit">Guardar selección</button><p class="form-message error" id="provider-filter-message" aria-live="polite"></p></form></dialog>
-  <script src="/app.js?v=4" type="module"></script>
+  <script src="/app.js?v=5" type="module"></script>
 </body>
 </html>

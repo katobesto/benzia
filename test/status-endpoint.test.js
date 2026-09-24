@@ -21,6 +21,7 @@ function makeStore({ validToken = 'valid-token', pausedToken = 'paused-token' } 
     getSettings: () => ({}),
     listKeys: () => [{ id: 'key-1', name: 'Equipo Alpha', prefix: 'lmg_a', revokedAt: null, pausedAt: null }],
     getMetrics: () => [metric],
+    getModels: () => [],
     recordMetric: async () => {},
     findKeyByToken: (token) => {
       if (token === validToken) return { id: 'key-1', name: 'Equipo Alpha', prefix: 'lmg_a', revokedAt: null, pausedAt: null };
