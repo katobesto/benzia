@@ -21,6 +21,7 @@ npm start
 - Endpoint para usuarios: `http://IP-DEL-EQUIPO:3401/v1`
 - Entrada pública: `http://IP-DEL-EQUIPO:3401/` (redirige al chat)
 - Panel a través del gateway: `http://IP-DEL-EQUIPO:3401/dashboard`
+- Estado del servicio: `http://IP-DEL-EQUIPO:3401/status`
 - Chat para usuarios: `http://IP-DEL-EQUIPO:3401/chat`
 - Proveedor IA Local esperado: `http://127.0.0.1:1234`
 
@@ -31,6 +32,8 @@ El panel sólo escucha en `127.0.0.1` por defecto. El gateway escucha en todas l
 Primero cree una clave con nombre desde el panel. El secreto se muestra una sola vez.
 
 Una clave puede pausarse temporalmente desde **Claves API** y reanudarse conservando el mismo token. La revocación es definitiva. Al pausar se puede definir un aviso personalizado de hasta 500 caracteres y editarlo después; si queda vacío se usa el mensaje administrativo predeterminado. Una clave pausada puede abrir el chat y consultar la lista de modelos, pero sus inferencias no llegan al proveedor: benzIA devuelve el aviso como respuesta de asistente compatible, también en streaming. Así aparece como contestación tanto en el chat como en clientes como OpenCode. Una clave inválida o revocada recibe HTTP `401`.
+
+Si una clave está en **Permitir externos**, aparece un botón **Proveedores** que abre un diálogo con todos los proveedores externos configurados para marcar cuáles serán visibles para esa clave. La marca actúa como filtro: en `/v1/models` solo se muestran los proveedores marcados que estén realmente disponibles en ese momento (si un proveedor está apagado simplemente no aparece), y las peticiones a un proveedor no marcado se rechazan con HTTP `403`.
 
 ```javascript
 import OpenAI from "openai";
@@ -53,6 +56,22 @@ También se admite `x-api-key`. Todas las rutas `/v1/*` se reenvían a Proveedor
 En **Configuración → Proveedores externos** se pueden registrar hasta 20 servidores OpenAI-compatible con un nombre, un prefijo, su URL base y un token opcional. benzIA consulta dinámicamente el endpoint `/v1/models` de cada origen cuando un cliente solicita la lista de modelos. Los modelos locales conservan su identificador original y los externos se publican como `proveedor/modelo`; al usarlos, benzIA retira el prefijo y reenvía la petición y las credenciales al proveedor correspondiente.
 
 Cada clave de benzIA tiene un permiso independiente: **Solo proveedor local** o **Permitir proveedores externos**. Por seguridad, las claves existentes y las nuevas usan sólo el proveedor local de forma predeterminada. El permiso puede elegirse al crear la clave o cambiarse después desde **Claves API**. Los tokens de proveedores externos se almacenan únicamente en el servidor y nunca se devuelven al navegador.
+
+### Capacidades de modelo en `/v1/models`
+
+Los endpoints `/v1/models` de Proveedor IA Local no anuncian qué modalidades de entrada acepta cada modelo (texto, imagen…). benzIA rellena ese hueco con una referencia declarada por el operador: `data/model-capabilities.json` (vea `model-capabilities.example.json`). Cada entrada nombra el ID público del modelo — el ID original para modelos locales o `proveedor/modelo` para externos; también se acepta el ID sin prefijo — y declara `input` (modalidades de entrada; por defecto `["text"]`) y `output` (por defecto `["text"]`). Las modalidades admitidas son `text` y `image`.
+
+```json
+{
+  "unsloth/qwen3.8-27b-gguf/qwen3.8-27b-ud-q4_k_s.gguf": { "input": ["text"], "output": ["text"] },
+  "qwen2.5-vl-7b-instruct-q4_k_m.gguf": { "input": ["text", "image"], "output": ["text"] },
+  "cloud/mi-modelo-externo": { "input": ["text", "image"] }
+}
+```
+
+Cuando un modelo aparece en el mapa, `GET /v1/models` le añade `input_modalities` y `output_modalities`; los modelos sin declaración se devuelven intactos. El archivo se lee en cada consulta, por lo que los cambios aplican sin reiniciar. También se puede administrar por API con `GET /admin/api/model-capabilities` y `PUT /admin/api/model-capabilities` (cuerpo `{ "capabilities": { … } }`), que valida y reescribe el archivo.
+
+Declarar `input: ["text"]` en un modelo que no ve es intencionado: avisa a los clientes de que no deben enviarle imágenes. Y tenga en cuenta que algunos clientes (por ejemplo DSH) resuelven las modalidades desde su propia configuración de proveedor, no desde el endpoint, así que en ellos declare además la capacidad en su fichero de configuración (p. ej. `input: [text, image]` en la definición del modelo).
 
 ## Chat web para usuarios
 
@@ -113,6 +132,8 @@ Cambiar los puertos requiere reiniciar el proceso. La URL y clave upstream, adem
 En **Configuración → Acceso público** puede indicar una URL como `https://llm.example.com`. benzIA la mostrará como endpoint de conexión para los clientes. Este ajuste no crea el DNS ni el túnel: en Cloudflare debe apuntar ese hostname al origen `http://localhost:3401`, normalmente mediante Cloudflare Tunnel, y mantener el panel administrativo fuera de la ruta pública.
 
 El mismo origen publica el panel en `/dashboard` y el chat en `/chat`. Las carcasas HTML/CSS/JS se sirven sin autenticación, pero no contienen datos administrativos ni acceso al modelo. Todas las consultas y operaciones de `/admin/api/*` requieren `ADMIN_TOKEN`; `/chat/api/*` y `/v1/*` requieren una clave de usuario activa. Se recomienda añadir además una política de Cloudflare Access para `/dashboard`, `/keys`, `/activity`, `/settings` y `/admin/api/*`.
+
+`/status` es la vista de estado para usuarios y funciona igual que `/chat`: la página se abre sin autenticación y solicita una clave de acceso benzIA (las creadas en **Claves API** del panel). Con una clave válida da acceso únicamente al dashboard en modo solo lectura, sin menú lateral ni acceso a utilidades, configuración, servidor o gestión de claves. Una clave pausada puede abrir la página pero ve su aviso de pausa en lugar del dashboard; las revocadas son rechazadas.
 
 ## Docker
 

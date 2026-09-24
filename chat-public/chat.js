@@ -41,11 +41,12 @@ const state = {
   endpoint: '',
   identity: null,
   models: [],
-  conversations: loadConversations(),
-  activeId: localStorage.getItem(ACTIVE_KEY) || '',
+  conversations: [],
+  activeId: '',
   pendingAttachments: [],
   webSearchAvailable: false,
   webSearchEnabled: false,
+  modelsLoading: false,
   generating: false,
   controller: null
 };
@@ -121,28 +122,53 @@ function instructionsFor(conversation) {
   return parts.join('\n\n');
 }
 
-function loadConversations() {
+function nextPaint() {
+  return new Promise((resolve) => requestAnimationFrame(resolve));
+}
+
+function normalizeConversation(conversation) {
+  return {
+    id: conversation.id,
+    title: String(conversation.title || 'Nueva conversación').slice(0, 80),
+    model: String(conversation.model || ''),
+    instructions: normalizedInstructions(conversation.instructions),
+    createdAt: conversation.createdAt || new Date().toISOString(),
+    updatedAt: conversation.updatedAt || new Date().toISOString(),
+    messages: Array.isArray(conversation.messages)
+      ? conversation.messages
+        .filter((message) => ['user', 'assistant', 'system'].includes(message?.role) && typeof message.content === 'string')
+        .slice(-MAX_MESSAGES)
+        .map((message) => ({
+          ...message,
+          thinking: typeof message.thinking === 'string' ? message.thinking.slice(0, MAX_DOCUMENT_CHARS) : '',
+          attachments: normalizedAttachments(message.attachments),
+          webSearch: normalizedWebSearch(message.webSearch),
+          research: normalizedResearch(message.research)
+        }))
+      : []
+  };
+}
+
+async function loadConversations(onProgress = () => {}) {
+  // Deliberately called only after the access token has been accepted.
+  onProgress(2);
+  await nextPaint();
   try {
     const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter((conversation) => conversation && typeof conversation.id === 'string')
-      .slice(0, MAX_CONVERSATIONS)
-      .map((conversation) => ({
-        id: conversation.id,
-        title: String(conversation.title || 'Nueva conversación').slice(0, 80),
-        model: String(conversation.model || ''),
-        instructions: normalizedInstructions(conversation.instructions),
-        createdAt: conversation.createdAt || new Date().toISOString(),
-        updatedAt: conversation.updatedAt || new Date().toISOString(),
-        messages: Array.isArray(conversation.messages)
-          ? conversation.messages
-            .filter((message) => ['user', 'assistant', 'system'].includes(message?.role) && typeof message.content === 'string')
-            .slice(-MAX_MESSAGES)
-            .map((message) => ({ ...message, attachments: normalizedAttachments(message.attachments), webSearch: normalizedWebSearch(message.webSearch), research: normalizedResearch(message.research) }))
-          : []
-      }));
+    const stored = parsed.filter((conversation) => conversation && typeof conversation.id === 'string').slice(0, MAX_CONVERSATIONS);
+    if (!stored.length) { onProgress(100); return []; }
+    const conversations = [];
+    for (let index = 0; index < stored.length; index += 1) {
+      conversations.push(normalizeConversation(stored[index]));
+      onProgress(Math.round(((index + 1) / stored.length) * 92) + 8);
+      if (index % 2 === 1) await nextPaint();
+    }
+    return conversations;
   } catch {
     return [];
+  } finally {
+    onProgress(100);
   }
 }
 
@@ -647,10 +673,22 @@ function computeStats(message, timing, usage) {
   const outputTokens = usage?.output_tokens ?? 0;
   const reasoningTokens = usage?.output_tokens_details?.reasoning_tokens ?? 0;
   const visibleOutputTokens = Math.max(0, outputTokens - reasoningTokens);
-  const prefillTokensPerSec = (ttftMs && inputTokens > 0) ? inputTokens / (ttftMs / 1000) : null;
-  const genStart = timing.firstVisibleAt || timing.firstTokenAt || 0;
-  const genMs = genStart ? endTime - genStart : 0;
-  const generationTokensPerSec = (genMs > 0 && visibleOutputTokens > 0) ? visibleOutputTokens / (genMs / 1000) : null;
+  // Prefill: tokens de entrada reales si el modelo los reporta; si no, la
+  // estimación local del tamaño del contexto enviado.
+  const prefillBasis = inputTokens > 0 ? inputTokens : (timing.inputTokenEstimate || 0);
+  const prefillTokensPerSec = (ttftMs && prefillBasis > 0) ? prefillBasis / (ttftMs / 1000) : null;
+  // Generación: ventana entre el primer y el último token recibido (CoT más
+  // respuesta); se prefiere la tasa medida por el proveedor cuando la reporta.
+  const generationStart = timing.firstTokenAt || timing.startedAt;
+  const generationEnd = timing.lastTokenAt || endTime;
+  let generationTokensPerSec = null;
+  const upstreamRate = Number(timing.upstreamStats?.tokens_per_second);
+  if (Number.isFinite(upstreamRate) && upstreamRate > 0) {
+    generationTokensPerSec = upstreamRate;
+  } else if (generationEnd > generationStart) {
+    const generated = outputTokens > 0 ? outputTokens : estimateTokens(`${message.thinking || ''}${message.content || ''}`);
+    if (generated > 0) generationTokensPerSec = generated / ((generationEnd - generationStart) / 1000);
+  }
   return {
     responseTimeMs: Math.round(responseTimeMs),
     ttftMs: ttftMs ? Math.round(ttftMs) : null,
@@ -662,6 +700,41 @@ function computeStats(message, timing, usage) {
     visibleOutputTokens,
     hasUsage: Boolean(usage)
   };
+}
+
+const LIVE_RATE_WINDOW_MS = 5000;
+
+// Velocidad en vivo sobre una ventana deslizante de muestras acumuladas de
+// tokens (pensamiento más respuesta), igual que el dashboard de benzIA.
+function liveGenerationRate(timing, now) {
+  const samples = timing.samples || [];
+  if (!samples.length) return null;
+  const reference = samples.length > 1 ? samples[1] : samples[0];
+  const windowStart = Math.max(timing.firstTokenAt || 0, now - LIVE_RATE_WINDOW_MS);
+  if (reference.at < windowStart) return null;
+  const seconds = (now - reference.at) / 1000;
+  if (seconds < 0.25) return null;
+  const rate = (samples[samples.length - 1].tokens - reference.tokens) / seconds;
+  return rate > 0 ? rate : null;
+}
+
+function livePhaseChips(timing, now) {
+  const chips = [];
+  const elapsedMs = now - timing.startedAt;
+  if (!timing.firstTokenAt) {
+    // Prefill en curso: estimación en vivo según el tamaño del contexto enviado.
+    if (elapsedMs > 300 && (timing.inputTokenEstimate || 0) > 0) {
+      const rate = timing.inputTokenEstimate / (elapsedMs / 1000);
+      if (rate > 0) chips.push(statChip('prefill', `≈ ${formatTps(rate)} tok/s`));
+    }
+    return chips;
+  }
+  const ttftMs = timing.firstTokenAt - timing.startedAt;
+  const prefillBasis = timing.inputTokenEstimate || 0;
+  if (ttftMs > 0 && prefillBasis > 0) chips.push(statChip('prefill', `${formatTps(prefillBasis / (ttftMs / 1000))} tok/s`));
+  const rate = liveGenerationRate(timing, now);
+  if (rate) chips.push(statChip('generación', `${formatTps(rate)} tok/s`));
+  return chips;
 }
 
 function statChip(label, value) {
@@ -696,15 +769,10 @@ function buildStatsDom(message) {
   container.className = 'message-stats';
   if (message.pending) {
     const timing = message._timing;
-    if (timing?.firstTokenAt) {
+    if (timing) {
       const now = performance.now();
-      const elapsed = now - timing.startedAt;
-      const visibleTokens = estimateTokens(message.content || '');
-      const genStart = timing.firstVisibleAt || timing.firstTokenAt || timing.startedAt;
-      const genElapsed = Math.max(1, now - genStart);
-      const tps = visibleTokens / (genElapsed / 1000);
-      if (tps > 0) container.append(statChip('velocidad', `${formatTps(tps)} tok/s`));
-      container.append(statChip('respuesta', formatMs(elapsed)));
+      container.append(statChip('respuesta', formatMs(now - timing.startedAt)));
+      container.append(...livePhaseChips(timing, now));
     }
     return container;
   }
@@ -718,6 +786,116 @@ function buildStatsDom(message) {
     container.append(statChip('tokens', tokenLabel));
   }
   return container;
+}
+
+function thinkingPanelElement(message) {
+  // Reasoning is a live, secondary trace: readable on demand, never styled as
+  // another assistant reply.
+  if (message.role !== 'assistant' || (!message.pending && !message.thinking)) return null;
+  const panel = document.createElement('section');
+  panel.className = `thinking-panel${message.pending ? ' is-pending' : ''}`;
+  const toggle = document.createElement('button');
+  toggle.type = 'button';
+  toggle.className = 'thinking-toggle';
+  const label = document.createElement('span');
+  label.className = 'thinking-label';
+  const status = document.createElement('strong');
+  status.textContent = message.pending ? (message.thinking ? 'Thinking' : 'Prefill') : 'Thinking';
+  const line = document.createElement('span');
+  line.className = 'thinking-line hidden';
+  line.setAttribute('aria-hidden', 'true');
+  const activityIcon = document.createElement('span');
+  activityIcon.className = 'thinking-activity-icon';
+  activityIcon.setAttribute('aria-hidden', 'true');
+  for (let pixel = 0; pixel < 5; pixel += 1) {
+    const dot = document.createElement('i');
+    activityIcon.append(dot);
+  }
+  label.append(activityIcon, status);
+  const chevron = document.createElement('span');
+  chevron.className = 'thinking-chevron';
+  chevron.setAttribute('aria-hidden', 'true');
+  const chevronIcon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  chevronIcon.setAttribute('viewBox', '0 0 24 24');
+  chevronIcon.setAttribute('fill', 'none');
+  const chevronPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  chevronPath.setAttribute('d', 'm7 10 5 5 5-5');
+  chevronIcon.append(chevronPath);
+  chevron.append(chevronIcon);
+  // El botón de desplegar va delante del ticker para que su posición se mantenga
+  // fija mientras el texto del pensamiento se va actualizando a su derecha.
+  label.append(chevron, line);
+  toggle.append(label);
+  const content = document.createElement('pre');
+  content.className = 'thinking-content hidden';
+  content.textContent = message.thinking || '';
+  const setExpanded = (expanded) => {
+    content.classList.toggle('hidden', !expanded);
+    panel.classList.toggle('expanded', expanded);
+    toggle.setAttribute('aria-expanded', String(expanded));
+    toggle.setAttribute('aria-label', expanded ? 'Ocultar pensamiento' : 'Mostrar pensamiento');
+    syncThinkingLine(panel, message);
+  };
+  setExpanded(Boolean(message.thinkingExpanded));
+  toggle.addEventListener('click', () => {
+    message.thinkingExpanded = !message.thinkingExpanded;
+    setExpanded(message.thinkingExpanded);
+  });
+  panel.append(toggle, content);
+  syncThinkingLine(panel, message);
+  return panel;
+}
+
+const THINKING_LINE_MAX = 64;
+
+function isThinkingBoundary(char) {
+  return char === '\n' || ',.;:!?…'.includes(char);
+}
+
+// The collapsed ticker shows the phrase currently being "thought" (text since the
+// last punctuation mark). When a new phrase arrives it replaces the previous one
+// in the same fixed line, so the line illustrates the thinking without growing.
+function thinkingLineText(message) {
+  const text = message.thinking || '';
+  const line = message._thinkingLine || (message._thinkingLine = { start: 0 });
+  if (line.start > text.length) line.start = 0;
+  const rest = text.slice(line.start);
+  let lastBoundary = -1;
+  for (let i = 0; i < rest.length; i += 1) {
+    if (isThinkingBoundary(rest[i])) lastBoundary = i + 1;
+  }
+  let phrase;
+  if (lastBoundary === -1) {
+    phrase = rest.trim();
+  } else {
+    const inProgress = rest.slice(lastBoundary).trim();
+    if (inProgress) {
+      phrase = inProgress;
+      line.start += lastBoundary;
+    } else {
+      const completed = rest.slice(0, lastBoundary);
+      let phraseStart = 0;
+      for (let i = completed.length - 2; i >= 0; i -= 1) {
+        if (isThinkingBoundary(completed[i])) { phraseStart = i + 1; break; }
+      }
+      phrase = completed.slice(phraseStart).trim();
+    }
+  }
+  if (phrase.length > THINKING_LINE_MAX) phrase = `…${phrase.slice(1 - THINKING_LINE_MAX + 1)}`;
+  return phrase;
+}
+
+function syncThinkingLine(panel, message) {
+  const line = panel.querySelector('.thinking-line');
+  if (!line) return;
+  const show = Boolean(message.pending)
+    && Boolean(message.thinking)
+    && !message._thinkingComplete
+    && !panel.classList.contains('expanded');
+  line.classList.toggle('hidden', !show);
+  if (!show) return;
+  const phrase = thinkingLineText(message);
+  if (phrase) line.textContent = phrase;
 }
 
 function messageElement(message, index) {
@@ -747,11 +925,13 @@ function messageElement(message, index) {
   });
   meta.append(author, copy);
   const content = document.createElement('div');
-  content.className = 'message-content';
-  appendMessageContent(content, message.content || (message.pending ? 'Pensando' : ''), message.research?.sources || []);
+  content.className = `message-content${message.pending && !message.content ? ' hidden' : ''}`;
+  appendMessageContent(content, message.content || '', message.research?.sources || []);
   const attachments = normalizedAttachments(message.attachments);
   body.append(meta);
   if (attachments.length) body.append(messageAttachmentsElement(attachments));
+  const thinking = thinkingPanelElement(message);
+  if (thinking) body.append(thinking);
   const researchTrace = researchTraceElement(message.research);
   if (researchTrace) body.append(researchTrace);
   const webSources = webSourcesElement(message.webSearch);
@@ -798,38 +978,78 @@ function toast(message) {
   toast.timer = setTimeout(() => element.classList.remove('show'), 1800);
 }
 
+function setSessionLoading(visible, progress = 0) {
+  const loader = $('#session-loader');
+  loader.classList.toggle('hidden', !visible);
+  const value = Math.max(0, Math.min(100, Math.round(progress)));
+  $('#session-loading-progress').textContent = `${value}%`;
+  $('#session-loading-bar').value = value;
+}
+
+function setAccessVerifying(verifying) {
+  $('#access-form').classList.toggle('is-verifying', verifying);
+  $('#access-auto-status').classList.toggle('hidden', !verifying);
+}
+
 async function readError(response) {
   const payload = await response.json().catch(() => ({}));
   return payload.error?.message || payload.error || `Error HTTP ${response.status}`;
 }
 
 async function connect(token) {
+  // This is the only blocking access check. It is served by benzIA itself and
+  // does not contact a model or the upstream provider.
   const configResponse = await fetch('/chat/api/config', { headers: { authorization: `Bearer ${token}` } });
   if (!configResponse.ok) throw new Error(configResponse.status === 401 ? 'El token no es válido o ha sido revocado.' : await readError(configResponse));
   const config = await configResponse.json();
-  const modelsResponse = await fetch(`${config.endpoint}/models`, { headers: { authorization: `Bearer ${token}` } });
-  if (!modelsResponse.ok) throw new Error(modelsResponse.status === 401 ? 'El endpoint configurado ha rechazado el token.' : `No se pudieron consultar los modelos: ${await readError(modelsResponse)}`);
-  const payload = await modelsResponse.json();
-  const models = Array.isArray(payload.data) ? payload.data.map((model) => model.id).filter(Boolean) : [];
-  if (!models.length) throw new Error('El endpoint está disponible, pero no devuelve ningún modelo cargado.');
 
   state.token = token;
   state.endpoint = config.endpoint;
   state.identity = config.identity;
-  state.models = models;
   state.webSearchAvailable = Boolean(config.webSearchAvailable);
   if (!state.webSearchAvailable) state.webSearchEnabled = false;
   localStorage.setItem(TOKEN_KEY, token);
-  populateModels();
   $('#identity-pill').textContent = config.identity?.name || 'Clave activa';
   $('#access-screen').classList.add('dismissed');
   $('#access-screen').setAttribute('aria-hidden', 'true');
+  setAccessVerifying(false);
   document.body.classList.add('ready');
-  setConnection('online', 'Conectado');
+  setConnection('pending', 'Cargando modelos');
   renderWebSearchControl();
   renderInstructionsControl();
+  setModelLoading(true);
+  setSessionLoading(true, 0);
+  const modelsPromise = fetchModels(config.endpoint, token);
+  const conversations = await loadConversations((progress) => setSessionLoading(true, progress));
+  if (state.token !== token) return;
+  state.conversations = conversations;
+  state.activeId = localStorage.getItem(ACTIVE_KEY) || '';
+  setSessionLoading(false);
   renderAll();
-  if (window.innerWidth > 620 && !window.matchMedia('(pointer: coarse)').matches) $('#message-input').focus();
+  try {
+    const models = await modelsPromise;
+    if (state.token !== token) return;
+    state.models = models;
+    populateModels();
+    setModelLoading(false);
+    setConnection('online', 'Conectado');
+    renderAll();
+    if (window.innerWidth > 620 && !window.matchMedia('(pointer: coarse)').matches) $('#message-input').focus();
+  } catch (error) {
+    if (state.token !== token) return;
+    setModelLoading(false);
+    setConnection('error', 'Modelos no disponibles');
+    toast(error.message);
+  }
+}
+
+async function fetchModels(endpoint, token) {
+  const response = await fetch(`${endpoint}/models`, { headers: { authorization: `Bearer ${token}` } });
+  if (!response.ok) throw new Error(response.status === 401 ? 'El endpoint configurado ha rechazado el token.' : `No se pudieron consultar los modelos: ${await readError(response)}`);
+  const payload = await response.json();
+  const models = Array.isArray(payload.data) ? payload.data.map((model) => model.id).filter(Boolean) : [];
+  if (!models.length) throw new Error('El endpoint está disponible, pero no devuelve ningún modelo cargado.');
+  return models;
 }
 
 function populateModels() {
@@ -846,17 +1066,27 @@ function populateModels() {
   localStorage.setItem(MODEL_KEY, select.value);
 }
 
+function setModelLoading(loading) {
+  state.modelsLoading = loading;
+  $('#model-select').disabled = loading || state.generating;
+  $('#send-button').disabled = loading || state.generating;
+  $('#message-input').placeholder = loading ? 'Conectando modelos…' : 'Escribe un mensaje…';
+}
+
 function showAccess(message = '') {
   state.controller?.abort();
   state.token = '';
   state.endpoint = '';
   state.identity = null;
   state.models = [];
+  state.modelsLoading = false;
   state.webSearchAvailable = false;
   state.webSearchEnabled = false;
+  setSessionLoading(false);
   localStorage.removeItem(TOKEN_KEY);
   sessionStorage.removeItem(TOKEN_KEY);
   document.body.classList.remove('ready');
+  setAccessVerifying(false);
   $('#access-screen').classList.remove('dismissed');
   $('#access-screen').setAttribute('aria-hidden', 'false');
   $('#access-error').textContent = message;
@@ -912,9 +1142,10 @@ function setGenerating(generating, abortable = true) {
   $('#web-search-button').disabled = generating || !state.webSearchAvailable;
   $('#instructions-button').disabled = generating;
   document.querySelectorAll('.remove-attachment').forEach((button) => { button.disabled = generating; });
+  $('#send-button').disabled = generating || state.modelsLoading;
   $('#send-button').classList.toggle('hidden', generating);
   $('#stop-button').classList.toggle('hidden', !generating || !abortable);
-  $('#model-select').disabled = generating;
+  $('#model-select').disabled = generating || state.modelsLoading;
 }
 
 function renderWebSearchControl() {
@@ -926,18 +1157,54 @@ function renderWebSearchControl() {
   button.setAttribute('aria-label', state.webSearchEnabled ? 'Acceso internet activado' : 'Acceso internet');
 }
 
-function updatePendingMessage(conversation, content) {
+function updatePendingMessage(conversation, content, thinking = null) {
   const message = conversation.messages.at(-1);
   if (!message || message.role !== 'assistant') return;
   message.content = content;
+  if (thinking !== null) message.thinking = thinking;
   if (pendingMarkdownFrame) return;
   pendingMarkdownFrame = requestAnimationFrame(() => {
     pendingMarkdownFrame = 0;
     const article = $(`.message[data-index="${conversation.messages.length - 1}"]`);
     if (!article) return;
     const contentEl = article.querySelector('.message-content');
-    if (contentEl) appendMessageContent(contentEl, message.content || 'Pensando', message.research?.sources || []);
+    if (contentEl) {
+      contentEl.classList.toggle('hidden', !message.content);
+      appendMessageContent(contentEl, message.content || '', message.research?.sources || []);
+    }
+    const thinkingEl = article.querySelector('.thinking-content');
+    if (thinkingEl) {
+      thinkingEl.textContent = message.thinking || '';
+      if (!thinkingEl.classList.contains('hidden')) thinkingEl.scrollTop = thinkingEl.scrollHeight;
+    }
+    const thinkingPanel = article.querySelector('.thinking-panel');
+    if (thinkingPanel) syncThinkingLine(thinkingPanel, message);
     const statsEl = article.querySelector('.message-stats');
+    if (statsEl) statsEl.replaceChildren(...buildStatsDom(message).children);
+  });
+}
+
+// The chips must keep moving between network fragments (for example, while the
+// model is still in prefill), so they are refreshed on a short interval.
+let liveStatsTicker = null;
+
+function startLiveStatsTicker() {
+  stopLiveStatsTicker();
+  liveStatsTicker = setInterval(refreshLiveStats, 400);
+}
+
+function stopLiveStatsTicker() {
+  if (liveStatsTicker) {
+    clearInterval(liveStatsTicker);
+    liveStatsTicker = null;
+  }
+}
+
+function refreshLiveStats() {
+  const conversation = activeConversation();
+  (conversation?.messages || []).forEach((message, index) => {
+    if (!message.pending || !message._timing) return;
+    const statsEl = $(`.message[data-index="${index}"] .message-stats`);
     if (statsEl) statsEl.replaceChildren(...buildStatsDom(message).children);
   });
 }
@@ -1040,10 +1307,20 @@ async function requestCompletion(conversation, webContext = '', useExistingPendi
   saveConversations();
   setGenerating(true);
   state.controller = new AbortController();
+  startLiveStatsTicker();
   const assistantMessage = conversation.messages.at(-1);
-  assistantMessage._timing = { startedAt: performance.now(), firstTokenAt: 0, firstVisibleAt: 0 };
+  assistantMessage._timing = {
+    startedAt: performance.now(),
+    firstTokenAt: 0,
+    firstVisibleAt: 0,
+    lastTokenAt: 0,
+    lastVisibleAt: 0,
+    samples: [],
+    inputTokenEstimate: estimateContextInputTokens(context)
+  };
 
   let output = '';
+  let thinking = assistantMessage.thinking || '';
   let usage = null;
   try {
     const response = await fetch(`${state.endpoint}/responses`, {
@@ -1069,18 +1346,40 @@ async function requestCompletion(conversation, webContext = '', useExistingPendi
       buffer += decoder.decode(value, { stream: true });
       buffer = consumeSse(buffer, (payload) => {
         const timing = assistantMessage._timing;
+        const now = performance.now();
+        const choiceDelta = payload.choices?.[0]?.delta || {};
+        const reasoningFragment = [
+          'response.reasoning.delta', 'response.reasoning_text.delta',
+          'response.reasoning_summary.delta', 'response.reasoning_summary_text.delta'
+        ].includes(payload.type) ? payload.delta || '' : choiceDelta.reasoning_content ?? choiceDelta.reasoning ?? '';
         const anyFragment = payload.type?.endsWith('.delta') && typeof payload.delta === 'string'
           ? payload.delta
-          : payload.choices?.[0]?.delta?.content ?? payload.choices?.[0]?.delta?.reasoning_content ?? payload.choices?.[0]?.delta?.reasoning ?? payload.choices?.[0]?.text ?? '';
-        if (anyFragment && timing && !timing.firstTokenAt) timing.firstTokenAt = performance.now();
+          : choiceDelta.content ?? reasoningFragment ?? choiceDelta.text ?? '';
         const fragment = payload.type === 'response.output_text.delta'
           ? payload.delta || ''
-          : payload.choices?.[0]?.delta?.content ?? payload.choices?.[0]?.text ?? '';
-        if (fragment) {
-          if (timing && !timing.firstVisibleAt) timing.firstVisibleAt = performance.now();
-          output += fragment;
-          updatePendingMessage(conversation, output);
+          : choiceDelta.content ?? choiceDelta.text ?? '';
+        if (reasoningFragment) {
+          thinking += reasoningFragment;
+          assistantMessage.thinking = thinking;
+          const thinkingLabel = $(`.message[data-index="${conversation.messages.length - 1}"] .thinking-label strong`);
+          if (thinkingLabel) thinkingLabel.textContent = 'Thinking';
+          updatePendingMessage(conversation, output, thinking);
         }
+        if (fragment) {
+          assistantMessage._thinkingComplete = true;
+          if (timing && !timing.firstVisibleAt) timing.firstVisibleAt = now;
+          if (timing) timing.lastVisibleAt = now;
+          output += fragment;
+          updatePendingMessage(conversation, output, thinking);
+        }
+        if (anyFragment && timing) {
+          if (!timing.firstTokenAt) timing.firstTokenAt = now;
+          timing.lastTokenAt = now;
+          timing.samples.push({ at: now, tokens: estimateTokens(thinking) + estimateTokens(output) });
+          while (timing.samples.length > 2 && timing.samples[1].at < now - LIVE_RATE_WINDOW_MS) timing.samples.shift();
+        }
+        const upstreamStats = payload.response?.stats || payload.stats;
+        if (upstreamStats && Number.isFinite(upstreamStats.tokens_per_second) && timing) timing.upstreamStats = upstreamStats;
         const type = payload.type || '';
         if (type === 'response.completed' || type === 'response.incomplete' || type === 'response.failed') {
           usage = payload.response?.usage || payload.usage || payload.result?.usage || null;
@@ -1098,6 +1397,8 @@ async function requestCompletion(conversation, webContext = '', useExistingPendi
     if (message?.role === 'assistant') {
       message.content = output;
       delete message.pending;
+      delete message._thinkingComplete;
+      delete message._thinkingLine;
       if (message._timing) {
         if (message._timing.firstTokenAt || usage) {
           message.stats = computeStats(message, message._timing, usage);
@@ -1107,6 +1408,7 @@ async function requestCompletion(conversation, webContext = '', useExistingPendi
     }
     conversation.updatedAt = new Date().toISOString();
     saveConversations();
+    stopLiveStatsTicker();
     setGenerating(false);
     state.controller = null;
     renderAll();
@@ -1292,5 +1594,8 @@ $('#message-input').addEventListener('paste', (event) => {
 renderPendingAttachments();
 renderWebSearchControl();
 renderAll();
-if (state.token) connect(state.token).catch((error) => showAccess(error.message));
+if (state.token) {
+  setAccessVerifying(true);
+  connect(state.token).catch((error) => showAccess(error.message));
+}
 else showAccess();

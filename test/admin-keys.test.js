@@ -63,3 +63,64 @@ test('el panel pausa y reanuda una clave sin cambiar su token', async (t) => {
   assert.equal(resumedKey.pausedMessage, 'Contacta con Benzo para revisar tu cuenta.');
   assert.equal(store.findKeyByToken(created.token).id, created.id);
 });
+
+test('el panel marca qué proveedores externos ve cada clave', async (t) => {
+  const testDir = await fs.mkdtemp(path.join(os.tmpdir(), 'benzIA-admin-provider-filter-'));
+  const store = new SqliteStore(testDir, 30);
+  await store.init();
+  await store.updateSettings({ externalProviders: [
+    { id: 'openai', name: 'OpenAI', baseUrl: 'https://api.openai.com', apiKey: '' },
+    { id: 'groq', name: 'Groq', baseUrl: 'https://api.groq.com', apiKey: '' }
+  ] });
+  const created = await store.createKey('Equipo con externos', { allowExternalProviders: true });
+  const app = createAdminApp({
+    config: {
+      adminToken: 'admin-secret',
+      upstreamBaseUrl: 'http://127.0.0.1:1234',
+      upstreamApiKey: '',
+      publicGatewayUrl: 'http://127.0.0.1:3401',
+      gatewayPort: 3401,
+      adminPort: 3400,
+      metricsRetentionDays: 30
+    },
+    store
+  });
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise((resolve) => server.once('listening', resolve));
+  t.after(async () => {
+    await new Promise((resolve) => server.close(resolve));
+    store.close();
+    await fs.rm(testDir, { recursive: true, force: true });
+  });
+
+  const endpoint = `http://127.0.0.1:${server.address().port}/admin/api/keys/${created.id}/providers`;
+  const patchProviders = (body) => fetch(endpoint, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json', 'x-admin-token': 'admin-secret' },
+    body: JSON.stringify(body)
+  });
+
+  const filterResponse = await patchProviders({ providerIds: ['openai'] });
+  assert.equal(filterResponse.status, 200);
+  assert.deepEqual((await filterResponse.json()).key.externalProviderIds, ['openai']);
+
+  const allResponse = await patchProviders({ providerIds: null });
+  assert.equal(allResponse.status, 200);
+  assert.equal((await allResponse.json()).key.externalProviderIds, null);
+
+  const disabledResponse = await patchProviders({ allowExternalProviders: false });
+  assert.equal(disabledResponse.status, 200);
+  const disabledKey = (await disabledResponse.json()).key;
+  assert.equal(disabledKey.allowExternalProviders, false);
+  assert.equal(disabledKey.externalProviderIds, null);
+
+  const reenabled = await patchProviders({ allowExternalProviders: true, providerIds: ['groq', 'openai'] });
+  assert.deepEqual((await reenabled.json()).key.externalProviderIds, ['groq', 'openai']);
+
+  const invalidId = await patchProviders({ providerIds: ['Proveedor con espacios!'] });
+  assert.equal(invalidId.status, 400);
+  const invalidList = await patchProviders({ providerIds: 'openai' });
+  assert.equal(invalidList.status, 400);
+  const emptyBody = await patchProviders({});
+  assert.equal(emptyBody.status, 400);
+});

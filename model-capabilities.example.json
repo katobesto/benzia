@@ -1,0 +1,5 @@
+﻿{
+  "unsloth/qwen3.8-27b-gguf/qwen3.8-27b-ud-q4_k_s.gguf": { "input": ["text"], "output": ["text"] },
+  "qwen2.5-vl-7b-instruct-q4_k_m.gguf": { "input": ["text", "image"], "output": ["text"] },
+  "cloud/mi-modelo-externo": { "input": ["text", "image"] }
+}

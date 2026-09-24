@@ -6,7 +6,7 @@
   <meta name="color-scheme" content="dark">
   <meta name="description" content="Chat privado para probar los modelos servidos por benzIA.">
   <title>benzIA Chat</title>
-  <link rel="stylesheet" href="/chat/chat.css?v=20260913-1">
+  <link rel="stylesheet" href="/chat/chat.css?v=6">
 </head>
 <body>
   <div class="chat-shell" id="chat-shell" aria-hidden="true">
@@ -89,6 +89,10 @@
         <p class="disclaimer">El modelo puede equivocarse. Verifica la información importante.</p>
       </footer>
     </main>
+    <div class="session-loader hidden" id="session-loader" role="status" aria-live="polite" aria-label="Cargando sesiones locales">
+      <div class="session-loader-copy"><i aria-hidden="true"></i><strong>Cargando sesiones locales</strong><span id="session-loading-progress">0%</span></div>
+      <progress id="session-loading-bar" max="100" value="0">0%</progress>
+    </div>
   </div>
 
   <div class="access-screen" id="access-screen">
@@ -97,6 +101,7 @@
       <p class="eyebrow">Acceso al modelo</p>
       <h1>Inicia sesión en benzIA Chat</h1>
       <p>Introduce una clave de acceso activa creada por el administrador de benzIA.</p>
+      <div class="access-auto-status hidden" id="access-auto-status" role="status" aria-live="polite"><i aria-hidden="true"></i><div><strong>Verificando acceso</strong><span>Validando tu token guardado…</span></div></div>
       <label for="access-token">Token de acceso</label>
       <div class="token-field"><input id="access-token" type="password" required autocomplete="off" placeholder="lmg_••••••••••••"><button id="toggle-token" type="button" aria-label="Mostrar token">VER</button></div>
       <small class="token-help">Usa el secreto completo que se mostró al crear la clave. Se recordará en este navegador hasta que cambies de token.</small>
@@ -107,8 +112,8 @@
   </div>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
-  <script src="/chat/vendor/purify.min.js" defer></script>
-  <script src="/chat/vendor/marked.umd.js" defer></script>
-  <script src="/chat/chat.js?v=20260913-1" defer></script>
+  <script src="/chat/vendor/purify.min.js?v=2" defer></script>
+  <script src="/chat/vendor/marked.umd.js?v=2" defer></script>
+  <script src="/chat/chat.js?v=5" defer></script>
 </body>
 </html>

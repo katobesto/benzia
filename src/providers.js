@@ -1,4 +1,4 @@
-const PROVIDER_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,49}$/;
+export const PROVIDER_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,49}$/;
 
 export function normalizeProviderBaseUrl(value) {
   if (typeof value !== 'string' || !value.trim()) throw new Error('Introduce una URL base para el proveedor.');

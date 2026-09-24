@@ -9,15 +9,31 @@ const routes = {
 };
 
 const ADMIN_TOKEN_KEY = 'benzIA_admin_token';
+const STATUS_MODE = document.body.classList.contains('status-mode');
+const STATUS_TOKEN_KEY = 'benzIA_status_token';
 const DEFAULT_PAUSED_MESSAGE = 'Su token ha sido deshabilitado por el administrador. Consulte con Benzo para evaluar si se trata de un problema de pago o personal.';
 const legacyAdminToken = sessionStorage.getItem(ADMIN_TOKEN_KEY) || '';
 const rememberedAdminToken = localStorage.getItem(ADMIN_TOKEN_KEY) || legacyAdminToken;
 if (legacyAdminToken && !localStorage.getItem(ADMIN_TOKEN_KEY)) localStorage.setItem(ADMIN_TOKEN_KEY, legacyAdminToken);
 sessionStorage.removeItem(ADMIN_TOKEN_KEY);
-const pageName = routes[window.location.pathname.replace(/\/$/, '') || '/'] || 'dashboard';
-const state = { token: rememberedAdminToken, keys: [], overview: null, live: null, settings: null, utility: { providers: [], agents: [] } };
+const pageName = STATUS_MODE ? 'dashboard' : routes[window.location.pathname.replace(/\/$/, '') || '/'] || 'dashboard';
+const state = { token: STATUS_MODE ? localStorage.getItem(STATUS_TOKEN_KEY) || '' : rememberedAdminToken, keys: [], overview: null, live: null, settings: null, utility: { providers: [], agents: [] } };
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
+const overviewPath = STATUS_MODE ? '/status/api/overview' : '/admin/api/overview';
+const livePath = STATUS_MODE ? '/status/api/live' : '/admin/api/live';
+const sessionPath = STATUS_MODE ? '/status/api/session' : '/admin/api/session';
+const keysPath = STATUS_MODE ? '/status/api/keys' : '/admin/api/keys';
+
+if (STATUS_MODE) {
+  const authScreen = $('#auth-screen');
+  authScreen.querySelector('.overline').textContent = 'ESTADO BENZIA';
+  authScreen.querySelector('.overline + p').textContent = 'Introduce tu token de acceso benzIA para ver el estado del servicio.';
+  const authLabel = authScreen.querySelector('label');
+  authLabel.firstChild.textContent = 'Token de acceso';
+  authLabel.querySelector('small').textContent = 'Se recordará en este navegador hasta que cierres sesión.';
+  authScreen.querySelector('.auth-card button[type="submit"]').textContent = 'Ver estado';
+}
 const compactNumber = new Intl.NumberFormat('es-ES', { notation: 'compact', maximumFractionDigits: 1 });
 const exactNumber = new Intl.NumberFormat('es-ES');
 const dateTime = new Intl.DateTimeFormat('es-ES', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
@@ -27,21 +43,24 @@ let chartModel = null;
 function initializeRoute() {
   $$('[data-page]').forEach((page) => page.classList.toggle('active', page.dataset.page === pageName));
   $$('.nav-link').forEach((link) => link.classList.toggle('active', link.dataset.route === pageName));
-  $('#breadcrumb-page').textContent = pageName === 'keys' ? 'CLAVES API' : pageName.toUpperCase();
-  document.title = `${pageName === 'keys' ? 'Claves API' : pageName[0].toUpperCase() + pageName.slice(1)} · benzIA`;
+  $('#breadcrumb-page').textContent = STATUS_MODE ? 'ESTADO' : pageName === 'keys' ? 'CLAVES API' : pageName.toUpperCase();
+  document.title = STATUS_MODE ? 'Estado · benzIA' : `${pageName === 'keys' ? 'Claves API' : pageName[0].toUpperCase() + pageName.slice(1)} · benzIA`;
 }
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
     ...options,
     credentials: 'same-origin',
-    headers: { 'content-type': 'application/json', 'x-admin-token': state.token, ...(options.headers || {}) }
+    headers: STATUS_MODE
+      ? { 'x-api-key': state.token, ...(options.headers || {}) }
+      : { 'content-type': 'application/json', 'x-admin-token': state.token, ...(options.headers || {}) }
   });
   if (response.status === 401) {
-    localStorage.removeItem(ADMIN_TOKEN_KEY);
+    if (STATUS_MODE) localStorage.removeItem(STATUS_TOKEN_KEY);
+    else localStorage.removeItem(ADMIN_TOKEN_KEY);
     state.token = '';
     showAuth();
-    throw new Error('El token administrativo no es válido.');
+    throw new Error(STATUS_MODE ? 'El token de acceso no es válido.' : 'El token administrativo no es válido.');
   }
   if (response.status === 204) return null;
   const payload = await response.json().catch(() => ({}));
@@ -94,6 +113,20 @@ function overviewQuery() {
 }
 
 async function loadAll() {
+  if (STATUS_MODE) {
+    const [keyData, overview, live] = await Promise.all([
+      api(keysPath),
+      api(`${overviewPath}?${overviewQuery()}`),
+      api(livePath)
+    ]);
+    state.keys = keyData.keys;
+    state.overview = overview;
+    state.live = live;
+    renderKeyFilter();
+    if (state.overview) renderOverview();
+    if (state.live) renderLive();
+    return;
+  }
   const requests = [api('/admin/api/keys'), api('/admin/api/settings')];
   if (pageName === 'dashboard' || pageName === 'activity') requests.push(api(`/admin/api/overview?${overviewQuery()}`));
   const [[keyData, settings, overview], live] = await Promise.all([
@@ -119,13 +152,13 @@ async function loadAll() {
 }
 
 async function refreshOverview() {
-  state.overview = await api(`/admin/api/overview?${overviewQuery()}`);
+  state.overview = await api(`${overviewPath}?${overviewQuery()}`);
   renderOverview();
 }
 
 async function refreshLive() {
   const keyId = $('#key-filter').value;
-  state.live = await api(`/admin/api/live${keyId ? `?keyId=${encodeURIComponent(keyId)}` : ''}`);
+  state.live = await api(`${livePath}${keyId ? `?keyId=${encodeURIComponent(keyId)}` : ''}`);
   renderLive();
 }
 
@@ -293,14 +326,18 @@ function renderKeys() {
     const accessAction = key.pausedAt
       ? `<button class="row-action resume-key" data-id="${escapeHtml(key.id)}" type="button">Reanudar</button><button class="row-action edit-pause-message" data-id="${escapeHtml(key.id)}" type="button">Editar aviso</button>`
       : `<button class="row-action pause-key" data-id="${escapeHtml(key.id)}" type="button">Pausar</button>`;
-    const actions = key.revokedAt ? '' : `<div class="row-actions">${accessAction}<button class="row-action revoke-key" data-id="${escapeHtml(key.id)}" data-name="${escapeHtml(key.name)}" type="button">Revocar</button></div>`;
     const providerAccess = `<select class="key-provider-access" data-id="${escapeHtml(key.id)}" aria-label="Acceso a proveedores de ${escapeHtml(key.name)}" ${key.revokedAt ? 'disabled' : ''}><option value="local" ${!key.allowExternalProviders ? 'selected' : ''}>Solo proveedor local</option><option value="external" ${key.allowExternalProviders ? 'selected' : ''}>Permitir externos</option></select>`;
+    const providerFilterButton = key.allowExternalProviders
+      ? `<button class="row-action provider-filter" data-id="${escapeHtml(key.id)}" title="Elegir qué proveedores externos ve esta clave" type="button">Proveedores</button>`
+      : '';
+    const actions = key.revokedAt ? '' : `<div class="row-actions">${providerFilterButton}${accessAction}<button class="row-action revoke-key" data-id="${escapeHtml(key.id)}" data-name="${escapeHtml(key.name)}" type="button">Revocar</button></div>`;
     return `<tr><td><strong>${escapeHtml(key.name)}</strong></td><td><code>${escapeHtml(key.prefix)}••••</code></td><td>${dateTime.format(new Date(key.createdAt))}</td><td>${key.lastUsedAt ? dateTime.format(new Date(key.lastUsedAt)) : 'Nunca'}</td><td>${providerAccess}</td><td><span class="state-pill ${stateClass}">${stateLabel}</span></td><td>${actions}</td></tr>`;
   }).join('');
   table.querySelectorAll('.pause-key').forEach((button) => button.addEventListener('click', () => openPauseDialog(button.dataset.id, false)));
   table.querySelectorAll('.edit-pause-message').forEach((button) => button.addEventListener('click', () => openPauseDialog(button.dataset.id, true)));
   table.querySelectorAll('.resume-key').forEach((button) => button.addEventListener('click', () => resumeKey(button.dataset.id)));
   table.querySelectorAll('.revoke-key').forEach((button) => button.addEventListener('click', () => revokeKey(button.dataset.id, button.dataset.name)));
+  table.querySelectorAll('.provider-filter').forEach((button) => button.addEventListener('click', () => openProviderFilter(button.dataset.id)));
   table.querySelectorAll('.key-provider-access').forEach((select) => select.addEventListener('change', async () => {
     select.disabled = true;
     try {
@@ -607,6 +644,7 @@ function validateOpenCodeJson() {
 }
 
 async function checkUpstream() {
+  if (STATUS_MODE) return null;
   const dot = $('#rail-status-dot');
   const label = $('#rail-status');
   const pill = $('#settings-upstream-status');
@@ -627,6 +665,57 @@ async function checkUpstream() {
 async function revokeKey(id, name) {
   if (!confirm(`¿Revocar definitivamente la clave “${name}”? No podrá volver a activarse.`)) return;
   try { await api(`/admin/api/keys/${encodeURIComponent(id)}`, { method: 'DELETE' }); toast('Clave revocada'); await loadAll(); } catch (error) { toast(error.message); }
+}
+
+let providerFilterSelection = new Set();
+
+function providerHost(baseUrl) {
+  try { return new URL(baseUrl).host; } catch { return baseUrl || ''; }
+}
+
+function renderProviderFilterList() {
+  const providers = state.settings?.externalProviders || [];
+  const list = $('#provider-filter-list');
+  if (!providers.length) {
+    list.innerHTML = '<div class="empty-state">No hay proveedores externos configurados. Añádelos en Configuración.</div>';
+    return;
+  }
+  list.innerHTML = providers.map((provider) => `
+    <label class="provider-filter-row">
+      <input type="checkbox" data-provider-id="${escapeHtml(provider.id)}" ${providerFilterSelection.has(provider.id) ? 'checked' : ''}>
+      <div class="provider-filter-info"><strong>${escapeHtml(provider.name)}</strong><small>${escapeHtml(provider.id)} · ${escapeHtml(providerHost(provider.baseUrl))}</small></div>
+    </label>`).join('');
+}
+
+function openProviderFilter(keyId) {
+  const key = state.keys.find((item) => item.id === keyId);
+  if (!key || key.revokedAt || !key.allowExternalProviders) return;
+  const providers = state.settings?.externalProviders || [];
+  const available = new Set(providers.map((provider) => provider.id));
+  const base = key.externalProviderIds === null ? new Set(providers.map((provider) => provider.id)) : new Set(key.externalProviderIds);
+  providerFilterSelection = new Set([...base].filter((id) => available.has(id)));
+  $('#provider-filter-key-name').textContent = `Proveedores de ${key.name}`;
+  renderProviderFilterList();
+  $('#provider-filter-message').textContent = '';
+  $('#provider-filter-form').dataset.keyId = keyId;
+  $('#provider-dialog').showModal();
+}
+
+function saveProviderFilter(event) {
+  if (event.submitter?.value === 'cancel') return;
+  event.preventDefault();
+  const form = event.currentTarget;
+  const message = $('#provider-filter-message');
+  message.textContent = 'Guardando selección…';
+  message.classList.remove('error');
+  const selected = $$('#provider-filter-list input[type="checkbox"]:checked').map((input) => input.dataset.providerId);
+  const all = (state.settings?.externalProviders || []).map((provider) => provider.id);
+  api(`/admin/api/keys/${encodeURIComponent(form.dataset.keyId)}/providers`, {
+    method: 'PATCH',
+    body: JSON.stringify({ providerIds: all.length && selected.length === all.length ? null : selected })
+  })
+    .then(() => { $('#provider-dialog').close(); toast('Proveedores visibles actualizados'); return loadAll(); })
+    .catch((error) => { message.textContent = error.message; message.classList.add('error'); });
 }
 
 function openPauseDialog(id, editing) {
@@ -665,11 +754,31 @@ $('#auth-form').addEventListener('submit', async (event) => {
   const message = $('#auth-message');
   state.token = $('#admin-token').value;
   message.textContent = 'Verificando…'; message.classList.remove('error');
+  if (STATUS_MODE) {
+    try { await api(sessionPath); localStorage.setItem(STATUS_TOKEN_KEY, state.token); hideAuth(); message.textContent = ''; await loadAll(); }
+    catch (error) { message.textContent = error.message; message.classList.add('error'); }
+    return;
+  }
   try { await api('/admin/api/session'); localStorage.setItem(ADMIN_TOKEN_KEY, state.token); hideAuth(); message.textContent = ''; await loadAll(); }
   catch (error) { message.textContent = error.message; message.classList.add('error'); }
 });
 
-$('#logout-button').addEventListener('click', async () => { try { await api('/admin/api/server-session', { method: 'DELETE' }); } catch { /* La sesión administrativa puede haber expirado. */ } localStorage.removeItem(ADMIN_TOKEN_KEY); sessionStorage.removeItem(ADMIN_TOKEN_KEY); state.token = ''; $('#admin-token').value = ''; showAuth(); });
+$('#logout-button').addEventListener('click', async () => {
+  if (STATUS_MODE) {
+    localStorage.removeItem(STATUS_TOKEN_KEY);
+    sessionStorage.removeItem(STATUS_TOKEN_KEY);
+    state.token = '';
+    $('#admin-token').value = '';
+    showAuth();
+    return;
+  }
+  try { await api('/admin/api/server-session', { method: 'DELETE' }); } catch { /* La sesión administrativa puede haber expirado. */ }
+  localStorage.removeItem(ADMIN_TOKEN_KEY);
+  sessionStorage.removeItem(ADMIN_TOKEN_KEY);
+  state.token = '';
+  $('#admin-token').value = '';
+  showAuth();
+});
 
 document.querySelector('[data-route="server"]')?.addEventListener('click', async (event) => {
   event.preventDefault();
@@ -732,6 +841,7 @@ $('#pause-form').addEventListener('submit', async (event) => {
   }
 });
 $('#pause-message').addEventListener('input', updatePauseMessageCount);
+$('#provider-filter-form').addEventListener('submit', saveProviderFilter);
 $('#pause-default').addEventListener('click', () => { $('#pause-message').value = DEFAULT_PAUSED_MESSAGE; updatePauseMessageCount(); $('#pause-message').focus(); });
 $('#copy-token').addEventListener('click', async () => { await navigator.clipboard.writeText($('#created-token').textContent); toast('Token copiado'); });
 $('#close-token-dialog').addEventListener('click', () => $('#token-dialog').close());
@@ -880,7 +990,7 @@ $('#download-opencode-json').addEventListener('click', () => {
 
 window.addEventListener('resize', () => { clearTimeout(window.chartResize); window.chartResize = setTimeout(() => pageName === 'dashboard' && state.overview && renderTimeline(state.overview.timeline), 120); });
 initializeRoute(); updateClock(); setInterval(updateClock, 1000);
-api('/admin/api/session')
+api(sessionPath)
   .then(() => { hideAuth(); revealApp(); loadAll().catch((error) => toast(error.message)); })
   .catch(() => { showAuth(); revealApp(); });
 setInterval(() => { if (state.token && document.visibilityState === 'visible' && (pageName === 'dashboard' || pageName === 'activity')) refreshOverview().catch(() => {}); }, 15000);

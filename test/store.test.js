@@ -43,6 +43,59 @@ test('limita cada clave al proveedor local hasta habilitar expresamente los exte
   assert.equal((await store.setKeyExternalAccess(localOnly.id, true)).allowExternalProviders, true);
 });
 
+test('conserva el filtro de proveedores externos por clave y lo limpia al deshabilitar', async (t) => {
+  const testDir = await fs.mkdtemp(path.join(os.tmpdir(), 'benzIA-store-provider-filter-'));
+  const store = new SqliteStore(testDir, 30);
+  t.after(async () => { store.close(); await fs.rm(testDir, { recursive: true, force: true }); });
+  await store.init();
+  const all = await store.createKey('Todos los externos');
+  assert.equal(store.findKeyByToken(all.token).externalProviderIds, null);
+  const filtered = await store.createKey('Filtrada', { allowExternalProviders: true, externalProviderIds: ['openai', 'groq'] });
+  assert.deepEqual(store.findKeyByToken(filtered.token).externalProviderIds, ['openai', 'groq']);
+  const narrowed = await store.setKeyExternalAccess(filtered.id, true, ['openai']);
+  assert.deepEqual(narrowed.externalProviderIds, ['openai']);
+  const kept = await store.setKeyExternalAccess(filtered.id, true);
+  assert.deepEqual(kept.externalProviderIds, ['openai']);
+  const disabled = await store.setKeyExternalAccess(filtered.id, false);
+  assert.equal(disabled.allowExternalProviders, false);
+  assert.equal(disabled.externalProviderIds, null);
+});
+
+test('añade el filtro de proveedores a una base SQLite existente sin perder claves', async (t) => {
+  const testDir = await fs.mkdtemp(path.join(os.tmpdir(), 'benzIA-store-provider-schema-'));
+  const databasePath = path.join(testDir, 'gateway.sqlite');
+  const legacyDb = new DatabaseSync(databasePath);
+  legacyDb.exec(`
+    CREATE TABLE access_keys (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      prefix TEXT NOT NULL,
+      token_hash TEXT NOT NULL UNIQUE,
+      created_at TEXT NOT NULL,
+      paused_at TEXT,
+      paused_message TEXT,
+      revoked_at TEXT,
+      last_used_at TEXT,
+      allow_external_providers INTEGER NOT NULL DEFAULT 0
+    );
+  `);
+  legacyDb.prepare(`
+    INSERT INTO access_keys (id, name, prefix, token_hash, created_at, revoked_at, last_used_at, allow_external_providers)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+  `).run('legacy-external', 'Clave con externos', 'lmg_legacy', hashToken('legacy-token'), new Date().toISOString(), null, null);
+  legacyDb.close();
+
+  const store = new SqliteStore(testDir, 30);
+  t.after(async () => { store.close(); await fs.rm(testDir, { recursive: true, force: true }); });
+  await store.init();
+  const migrated = store.listKeys()[0];
+  assert.equal(migrated.allowExternalProviders, true);
+  assert.equal(migrated.externalProviderIds, null);
+  const updated = await store.setKeyExternalAccess('legacy-external', true, ['openai']);
+  assert.deepEqual(updated.externalProviderIds, ['openai']);
+  assert.deepEqual(store.findKeyByToken('legacy-token').externalProviderIds, ['openai']);
+});
+
 test('añade el estado de pausa a una base SQLite existente sin perder claves', async (t) => {
   const testDir = await fs.mkdtemp(path.join(os.tmpdir(), 'benzIA-store-schema-'));
   const databasePath = path.join(testDir, 'gateway.sqlite');

@@ -11,6 +11,38 @@ import { adminAuth } from '../src/admin-auth.js';
 import { createGatewayApp } from '../src/proxy.js';
 import { SqliteStore } from '../src/store.js';
 
+test('health comprueba realmente la disponibilidad del proveedor local', async (t) => {
+  const upstream = express();
+  upstream.get('/v1/models', (_req, res) => res.json({ object: 'list', data: [{ id: 'modelo-local' }] }));
+  const upstreamServer = upstream.listen(0, '127.0.0.1');
+  await new Promise((resolve) => upstreamServer.once('listening', resolve));
+
+  const store = { getSettings: () => ({}) };
+  const gateway = createGatewayApp({
+    config: {
+      upstreamBaseUrl: `http://127.0.0.1:${upstreamServer.address().port}`,
+      upstreamApiKey: '',
+      requestTimeoutMs: 1000
+    },
+    store
+  });
+  const gatewayServer = gateway.listen(0, '127.0.0.1');
+  await new Promise((resolve) => gatewayServer.once('listening', resolve));
+  t.after(() => new Promise((resolve) => gatewayServer.close(resolve)));
+  const healthUrl = `http://127.0.0.1:${gatewayServer.address().port}/health`;
+
+  const healthy = await fetch(healthUrl);
+  assert.equal(healthy.status, 200);
+  assert.deepEqual(await healthy.json(), {
+    status: 'ok', service: 'benzIA', upstream: `http://127.0.0.1:${upstreamServer.address().port}`, models: 1
+  });
+
+  await new Promise((resolve) => upstreamServer.close(resolve));
+  const degraded = await fetch(healthUrl);
+  assert.equal(degraded.status, 503);
+  assert.equal((await degraded.json()).status, 'degraded');
+});
+
 test('publica el dashboard antes de autenticar las rutas de inferencia', async (t) => {
   const adminApp = express();
   adminApp.get('/dashboard', (_req, res) => res.type('html').send('<h1>Dashboard</h1>'));
@@ -276,6 +308,115 @@ test('agrega modelos externos sólo para claves autorizadas y enruta el modelo p
   assert.equal(metrics[0].provider, 'cloud');
 });
 
+test('el filtro de proveedores visibles por clave limita modelos y enrutado sin consultar lo no marcado', async (t) => {
+  const local = express();
+  local.get('/v1/models', (_req, res) => res.json({ object: 'list', data: [{ id: 'modelo-local', object: 'model' }] }));
+  const localServer = local.listen(0, '127.0.0.1');
+  await new Promise((resolve) => localServer.once('listening', resolve));
+  t.after(() => new Promise((resolve) => localServer.close(resolve)));
+
+  let cloudModelCalls = 0;
+  let otherModelCalls = 0;
+  let chatTarget = '';
+  const cloud = express();
+  cloud.use(express.json());
+  cloud.get('/v1/models', (_req, res) => { cloudModelCalls += 1; res.json({ object: 'list', data: [{ id: 'org/modelo-cloud' }] }); });
+  cloud.post('/v1/chat/completions', (req, res) => {
+    chatTarget = 'cloud';
+    res.json({ choices: [{ message: { content: 'Desde cloud' } }], usage: { prompt_tokens: 1, completion_tokens: 1 } });
+  });
+  const cloudServer = cloud.listen(0, '127.0.0.1');
+  await new Promise((resolve) => cloudServer.once('listening', resolve));
+  t.after(() => new Promise((resolve) => cloudServer.close(resolve)));
+
+  const other = express();
+  other.get('/v1/models', (_req, res) => { otherModelCalls += 1; res.json({ object: 'list', data: [{ id: 'b/modelo-otro' }] }); });
+  const otherServer = other.listen(0, '127.0.0.1');
+  await new Promise((resolve) => otherServer.once('listening', resolve));
+  t.after(() => new Promise((resolve) => otherServer.close(resolve)));
+
+  const settings = {
+    externalProviders: [
+      { id: 'cloud', name: 'Cloud IA', baseUrl: `http://127.0.0.1:${cloudServer.address().port}`, apiKey: '' },
+      { id: 'other', name: 'Otro', baseUrl: `http://127.0.0.1:${otherServer.address().port}`, apiKey: '' }
+    ]
+  };
+  const store = {
+    getSettings: () => settings,
+    findKeyByToken: (token) => {
+      if (token === 'filtered-key') return { id: 'filtered', name: 'Filtrada', allowExternalProviders: true, externalProviderIds: ['cloud'] };
+      if (token === 'all-key') return { id: 'all', name: 'Todos', allowExternalProviders: true };
+      return { id: 'local', name: 'Local', allowExternalProviders: false };
+    },
+    recordMetric: async () => {}
+  };
+  const gateway = createGatewayApp({
+    config: { upstreamBaseUrl: `http://127.0.0.1:${localServer.address().port}`, upstreamApiKey: '', requestTimeoutMs: 5000 },
+    store
+  });
+  const gatewayServer = gateway.listen(0, '127.0.0.1');
+  await new Promise((resolve) => gatewayServer.once('listening', resolve));
+  t.after(() => new Promise((resolve) => gatewayServer.close(resolve)));
+  const baseUrl = `http://127.0.0.1:${gatewayServer.address().port}/v1`;
+
+  const filteredModels = await fetch(`${baseUrl}/models`, { headers: { authorization: 'Bearer filtered-key' } });
+  assert.deepEqual((await filteredModels.json()).data.map((model) => model.id), ['modelo-local', 'cloud/org/modelo-cloud']);
+  assert.equal(cloudModelCalls, 1);
+  assert.equal(otherModelCalls, 0, 'no debe consultar un proveedor que la clave no marcó');
+
+  const allModels = await fetch(`${baseUrl}/models`, { headers: { authorization: 'Bearer all-key' } });
+  assert.deepEqual((await allModels.json()).data.map((model) => model.id), ['modelo-local', 'cloud/org/modelo-cloud', 'other/b/modelo-otro']);
+
+  const forbidden = await fetch(`${baseUrl}/chat/completions`, {
+    method: 'POST', headers: { authorization: 'Bearer filtered-key', 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'other/b/modelo-otro', messages: [{ role: 'user', content: 'Hola' }] })
+  });
+  assert.equal(forbidden.status, 403);
+  assert.equal((await forbidden.json()).error.code, 'external_provider_forbidden');
+
+  const allowed = await fetch(`${baseUrl}/chat/completions`, {
+    method: 'POST', headers: { authorization: 'Bearer filtered-key', 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'cloud/org/modelo-cloud', messages: [{ role: 'user', content: 'Hola' }] })
+  });
+  assert.equal(allowed.status, 200);
+  assert.equal(chatTarget, 'cloud');
+});
+
+test('una fuente externa caída no retiene la lista de modelos durante su timeout completo', async (t) => {
+  const local = express();
+  local.get('/v1/models', (_req, res) => res.json({ object: 'list', data: [{ id: 'modelo-local' }] }));
+  const localServer = local.listen(0, '127.0.0.1');
+  await new Promise((resolve) => localServer.once('listening', resolve));
+  t.after(() => new Promise((resolve) => localServer.close(resolve)));
+
+  const unavailable = express();
+  unavailable.get('/v1/models', () => {});
+  const unavailableServer = unavailable.listen(0, '127.0.0.1');
+  await new Promise((resolve) => unavailableServer.once('listening', resolve));
+  t.after(() => new Promise((resolve) => unavailableServer.close(resolve)));
+
+  const store = {
+    getSettings: () => ({ externalProviders: [{ id: 'slow', name: 'Lento', baseUrl: `http://127.0.0.1:${unavailableServer.address().port}`, apiKey: '' }] }),
+    findKeyByToken: () => ({ id: 'external', name: 'Externo', allowExternalProviders: true }),
+    recordMetric: async () => {}
+  };
+  const gateway = createGatewayApp({
+    config: { upstreamBaseUrl: `http://127.0.0.1:${localServer.address().port}`, upstreamApiKey: '', requestTimeoutMs: 5000 },
+    store
+  });
+  const gatewayServer = gateway.listen(0, '127.0.0.1');
+  await new Promise((resolve) => gatewayServer.once('listening', resolve));
+  t.after(() => new Promise((resolve) => gatewayServer.close(resolve)));
+
+  const startedAt = performance.now();
+  const response = await fetch(`http://127.0.0.1:${gatewayServer.address().port}/v1/models`, { headers: { authorization: 'Bearer external-key' } });
+  const elapsedMs = performance.now() - startedAt;
+  assert.equal(response.status, 200);
+  assert.deepEqual((await response.json()).data.map((model) => model.id), ['modelo-local']);
+  assert.ok(elapsedMs < 1_500, `La respuesta tardó ${elapsedMs} ms`);
+  assert.equal(response.headers.get('x-benzia-provider-errors'), 'slow');
+});
+
 test('registra la telemetría final del proveedor en streaming', async (t) => {
   const upstream = express();
   upstream.use(express.json());
@@ -313,6 +454,86 @@ test('registra la telemetría final del proveedor en streaming', async (t) => {
   assert.equal(metrics[0].lmCachedInputTokens, 8);
   assert.equal(metrics[0].tokensPerSecond, 42);
   assert.equal(metrics[0].throughputSource, 'upstream');
+});
+
+test('mantiene el timeout durante todo el stream y registra la interrupción', async (t) => {
+  const upstream = express();
+  upstream.use(express.json());
+  upstream.post('/v1/chat/completions', (_req, res) => {
+    res.type('text/event-stream');
+    res.flushHeaders();
+    res.write('data: {"choices":[{"delta":{"content":"Inicio"}}]}\n\n');
+    res.on('close', () => res.end());
+  });
+  const upstreamServer = upstream.listen(0, '127.0.0.1');
+  await new Promise((resolve) => upstreamServer.once('listening', resolve));
+  t.after(() => new Promise((resolve) => upstreamServer.close(resolve)));
+
+  const metrics = [];
+  const store = {
+    getSettings: () => ({}),
+    findKeyByToken: () => ({ id: 'key-1', name: 'Pruebas' }),
+    recordMetric: async (metric) => metrics.push(metric)
+  };
+  const gateway = createGatewayApp({
+    config: { upstreamBaseUrl: `http://127.0.0.1:${upstreamServer.address().port}`, upstreamApiKey: '', requestTimeoutMs: 80 },
+    store
+  });
+  const gatewayServer = gateway.listen(0, '127.0.0.1');
+  await new Promise((resolve) => gatewayServer.once('listening', resolve));
+  t.after(() => new Promise((resolve) => gatewayServer.close(resolve)));
+
+  const response = await fetch(`http://127.0.0.1:${gatewayServer.address().port}/v1/chat/completions`, {
+    method: 'POST',
+    headers: { authorization: 'Bearer valid-key', 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'modelo', stream: true, messages: [{ role: 'user', content: 'Hola' }] })
+  });
+  const body = await response.text();
+
+  assert.equal(response.status, 200);
+  assert.match(body, /Inicio/);
+  assert.match(body, /upstream_timeout/);
+  assert.equal(metrics[0].status, 504);
+  assert.equal(metrics[0].stream, true);
+});
+
+test('hace visible y registra un corte prematuro del proveedor', async (t) => {
+  const upstream = express();
+  upstream.use(express.json());
+  upstream.post('/v1/chat/completions', (_req, res) => {
+    res.type('text/event-stream');
+    res.flushHeaders();
+    res.write('data: {"choices":[{"delta":{"content":"Parcial"}}]}\n\n');
+    setTimeout(() => res.socket?.destroy(), 10);
+  });
+  const upstreamServer = upstream.listen(0, '127.0.0.1');
+  await new Promise((resolve) => upstreamServer.once('listening', resolve));
+  t.after(() => new Promise((resolve) => upstreamServer.close(resolve)));
+
+  const metrics = [];
+  const store = {
+    getSettings: () => ({}),
+    findKeyByToken: () => ({ id: 'key-1', name: 'Pruebas' }),
+    recordMetric: async (metric) => metrics.push(metric)
+  };
+  const gateway = createGatewayApp({
+    config: { upstreamBaseUrl: `http://127.0.0.1:${upstreamServer.address().port}`, upstreamApiKey: '', requestTimeoutMs: 5000 },
+    store
+  });
+  const gatewayServer = gateway.listen(0, '127.0.0.1');
+  await new Promise((resolve) => gatewayServer.once('listening', resolve));
+  t.after(() => new Promise((resolve) => gatewayServer.close(resolve)));
+
+  const response = await fetch(`http://127.0.0.1:${gatewayServer.address().port}/v1/chat/completions`, {
+    method: 'POST',
+    headers: { authorization: 'Bearer valid-key', 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'modelo', stream: true, messages: [{ role: 'user', content: 'Hola' }] })
+  });
+  const body = await response.text();
+
+  assert.match(body, /Parcial/);
+  assert.match(body, /upstream_interrupted/);
+  assert.equal(metrics[0].status, 502);
 });
 
 test('autentica un token real y persiste únicamente la caché reportada por el proveedor', async (t) => {

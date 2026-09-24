@@ -1,4 +1,5 @@
 import path from 'node:path';
+import fs from 'node:fs/promises';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
@@ -7,8 +8,10 @@ import helmet from 'helmet';
 
 import { adminAuth } from './admin-auth.js';
 import { DEFAULT_BRAVE_SEARCH_ENDPOINT, normalizeBraveEndpoint } from './brave-search.js';
-import { summarizeMetrics } from './metrics.js';
-import { fetchProviderModels, normalizeProviderBaseUrl, publicExternalProviders, sanitizeExternalProviders } from './providers.js';
+import { CAPABILITIES_FILENAME, loadModelCapabilities, sanitizeModelCapabilities } from './model-capabilities.js';
+import { buildOverviewPayload } from './overview.js';
+import { fetchProviderModels, normalizeProviderBaseUrl, publicExternalProviders, sanitizeExternalProviders, PROVIDER_ID_PATTERN } from './providers.js';
+import { jsonBodyErrorHandler } from './http-errors.js';
 
 const publicDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../public');
 
@@ -75,7 +78,7 @@ export function createAdminApp({ config, store, liveActivity }) {
   app.disable('x-powered-by');
   app.use(helmet({ contentSecurityPolicy: { directives: { 'script-src': ["'self'"], 'style-src': ["'self'"], 'img-src': ["'self'", 'data:'] } } }));
   app.use(express.json({ limit: '1mb' }));
-  app.use(express.static(publicDir, { extensions: ['html'] }));
+  app.use(express.static(publicDir, { extensions: ['html'], index: false }));
 
   const auth = adminAuth(config.adminToken);
   app.get('/admin/api/session', auth, (_req, res) => res.json({ authenticated: true }));
@@ -147,33 +150,9 @@ export function createAdminApp({ config, store, liveActivity }) {
   });
 
   app.get('/admin/api/overview', auth, (req, res) => {
-    const hours = Math.min(24 * 90, Math.max(1, Number.parseInt(req.query.hours || '24', 10)));
-    const keyId = typeof req.query.keyId === 'string' ? req.query.keyId : undefined;
-    const parseDate = (value, endOfDay = false) => {
-      if (typeof value !== 'string' || !value) return null;
-      const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(value);
-      const parsed = new Date(dateOnly ? `${value}T${endOfDay ? '23:59:59.999' : '00:00:00.000'}Z` : value);
-      return Number.isNaN(parsed.getTime()) ? null : parsed;
-    };
-    const hasDateRange = 'from' in req.query || 'to' in req.query;
-    const requestedFrom = parseDate(req.query.from);
-    const requestedTo = parseDate(req.query.to, true);
-    if (hasDateRange && ((req.query.from && !requestedFrom) || (req.query.to && !requestedTo) || (requestedFrom && requestedTo && requestedFrom > requestedTo))) {
-      return res.status(400).json({ error: 'El intervalo de fechas no es válido.' });
-    }
-    const now = new Date();
-    const fromDate = requestedFrom || new Date(now.getTime() - hours * 3600000);
-    const toDate = requestedTo || now;
-    const rangeHours = Math.max(1, (toDate.getTime() - fromDate.getTime()) / 3600000);
-    const from = fromDate.toISOString();
-    const to = toDate.toISOString();
-    const keys = store.listKeys();
-    const metrics = store.getMetrics({ from, to, keyId, limit: 50000 });
-    res.json({
-      range: { from, to, hours: rangeHours },
-      ...summarizeMetrics(metrics, keys, rangeHours > 72 ? 'day' : 'hour'),
-      recent: metrics.slice(-20).reverse()
-    });
+    const result = buildOverviewPayload(store, req.query);
+    if (result.error) return res.status(400).json({ error: result.error });
+    res.json(result.payload);
   });
 
   app.get('/admin/api/live', auth, (req, res) => {
@@ -207,9 +186,29 @@ export function createAdminApp({ config, store, liveActivity }) {
   });
 
   app.patch('/admin/api/keys/:id/providers', auth, async (req, res) => {
-    if (typeof req.body?.allowExternalProviders !== 'boolean') return res.status(400).json({ error: 'Selecciona un nivel de acceso válido.' });
-    const key = await store.setKeyExternalAccess(req.params.id, req.body.allowExternalProviders);
-    if (!key) return res.status(404).json({ error: 'Clave no encontrada o revocada.' });
+    const hasAccessLevel = 'allowExternalProviders' in req.body;
+    const hasFilter = 'providerIds' in req.body;
+    if (!hasAccessLevel && !hasFilter) return res.status(400).json({ error: 'Indica el nivel de acceso o los proveedores visibles.' });
+    if (hasAccessLevel && typeof req.body.allowExternalProviders !== 'boolean') return res.status(400).json({ error: 'El acceso a proveedores externos debe ser verdadero o falso.' });
+    let providerIds;
+    if (hasFilter) {
+      if (req.body.providerIds !== null) {
+        if (!Array.isArray(req.body.providerIds) || req.body.providerIds.length > 20) {
+          return res.status(400).json({ error: 'La lista de proveedores visibles no es válida.' });
+        }
+        for (const id of req.body.providerIds) {
+          if (typeof id !== 'string' || !PROVIDER_ID_PATTERN.test(id.trim().toLowerCase())) {
+            return res.status(400).json({ error: `El ID de proveedor “${id}” no es válido.` });
+          }
+        }
+        providerIds = [...new Set(req.body.providerIds.map((id) => id.trim().toLowerCase()))];
+      } else {
+        providerIds = null;
+      }
+    }
+    if (hasAccessLevel && req.body.allowExternalProviders === false) providerIds = null;
+    const key = await store.setKeyExternalAccess(req.params.id, hasAccessLevel ? req.body.allowExternalProviders : undefined, providerIds);
+    if (!key) return res.status(404).json({ error: 'Clave no encontrada.' });
     res.json({ key });
   });
 
@@ -370,9 +369,41 @@ export function createAdminApp({ config, store, liveActivity }) {
     }
   });
 
-  app.use('/admin/api', (_req, res) => res.status(404).json({ error: 'Ruta administrativa no encontrada.' }));
-  app.get('*', (_req, res) => res.sendFile(path.join(publicDir, 'index.html')));
+  // Referencia declarada por el operador: modalidades que anuncia cada modelo
+  // en GET /v1/models (input_modalities / output_modalities). Se guarda como
+  // archivo en el directorio de datos para que el gateway la lea en caliente.
+  app.get('/admin/api/model-capabilities', auth, async (_req, res) => {
+    try {
+      const capabilities = await loadModelCapabilities(config.dataDir);
+      res.json({ file: CAPABILITIES_FILENAME, dataDir: config.dataDir, count: Object.keys(capabilities).length, capabilities });
+    } catch {
+      res.status(500).json({ error: 'No se pudo leer el mapa de capacidades de modelos.' });
+    }
+  });
 
+  app.put('/admin/api/model-capabilities', auth, async (req, res) => {
+    let capabilities;
+    try {
+      capabilities = sanitizeModelCapabilities(req.body?.capabilities);
+    } catch (error) {
+      return res.status(400).json({ error: error.message || 'El mapa de capacidades de modelos no es válido.' });
+    }
+    try {
+      await fs.mkdir(config.dataDir, { recursive: true });
+      await fs.writeFile(path.join(config.dataDir, CAPABILITIES_FILENAME), `${JSON.stringify(capabilities, null, 2)}\n`, 'utf8');
+      res.json({ updated: true, count: Object.keys(capabilities).length });
+    } catch {
+      res.status(500).json({ error: 'No se pudo guardar el mapa de capacidades de modelos.' });
+    }
+  });
+
+  app.use('/admin/api', (_req, res) => res.status(404).json({ error: 'Ruta administrativa no encontrada.' }));
+  app.get('*', (_req, res) => {
+    res.set('cache-control', 'no-store');
+    res.sendFile(path.join(publicDir, 'index.html'));
+  });
+
+  app.use(jsonBodyErrorHandler);
   app.use((error, _req, res, _next) => {
     console.error(error);
     res.status(500).json({ error: 'Error interno del panel.' });

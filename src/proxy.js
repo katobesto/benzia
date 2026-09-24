@@ -4,11 +4,16 @@ import cors from 'cors';
 import express from 'express';
 
 import { extractAccessToken, PAUSED_TOKEN_MESSAGE } from './access-auth.js';
+import { jsonBodyErrorHandler } from './http-errors.js';
+import { loadModelCapabilities, annotateModel } from './model-capabilities.js';
 import { fetchProviderModels, routeForModel } from './providers.js';
 import { extractOutputText, extractUpstreamTelemetry, extractUsage } from './usage.js';
 
 const INFERENCE_PATHS = new Set(['/v1/chat/completions', '/v1/completions', '/v1/responses', '/v1/embeddings']);
 const DASHBOARD_PATHS = new Set(['/dashboard', '/keys', '/activity', '/settings', '/utilities', '/server', '/styles.css', '/app.js', '/favicon.ico']);
+// Listing models is part of the interactive chat startup. External providers
+// must never turn an unavailable host into an eight-second UI stall.
+const EXTERNAL_MODELS_TIMEOUT_MS = 750;
 
 const safeError = (status, message, type = 'gateway_error') => ({
   error: { message, type, code: type, param: null }
@@ -93,11 +98,36 @@ function sendPausedInference(res, path, body, message = PAUSED_TOKEN_MESSAGE) {
 
 function pickResponseHeaders(headers) {
   const result = {};
-  for (const name of ['content-type', 'content-length', 'x-request-id']) {
+  for (const name of ['content-type', 'content-length', 'cache-control', 'x-request-id']) {
     const value = headers.get(name);
     if (value) result[name] = value;
   }
   return result;
+}
+
+function writeWithBackpressure(res, chunk) {
+  if (res.write(chunk)) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      res.off('drain', onDrain);
+      res.off('close', onClose);
+      res.off('error', onError);
+    };
+    const onDrain = () => { cleanup(); resolve(); };
+    const onClose = () => { cleanup(); reject(new Error('El cliente cerró la conexión.')); };
+    const onError = (error) => { cleanup(); reject(error); };
+    res.once('drain', onDrain);
+    res.once('close', onClose);
+    res.once('error', onError);
+  });
+}
+
+async function recordMetricSafely(store, metric) {
+  try {
+    await store.recordMetric(metric);
+  } catch (error) {
+    console.error(`No se pudo guardar la métrica ${metric.id}:`, error);
+  }
 }
 
 function parseSseBuffer(buffer, onPayload) {
@@ -112,13 +142,14 @@ function parseSseBuffer(buffer, onPayload) {
   return remainder;
 }
 
-export function createGatewayApp({ config, store, adminApp, chatApp, liveActivity }) {
+export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, liveActivity }) {
   const app = express();
   app.disable('x-powered-by');
   app.use(cors({ origin: true, credentials: false }));
 
   app.get('/', (_req, res) => res.redirect(302, '/chat'));
   if (chatApp) app.use('/chat', chatApp);
+  if (statusApp) app.use('/status', statusApp);
 
   // Publica la carcasa del panel bajo el mismo hostname del gateway. Los datos
   // y las operaciones de /admin/api siguen protegidos dentro de adminApp.
@@ -133,8 +164,20 @@ export function createGatewayApp({ config, store, adminApp, chatApp, liveActivit
 
   app.use(express.json({ limit: '20mb' }));
 
-  app.get('/health', (_req, res) => {
-    res.json({ status: 'ok', service: 'benzIA', upstream: effectiveSettings().upstreamBaseUrl });
+  app.get('/health', async (_req, res) => {
+    const settings = effectiveSettings();
+    try {
+      const models = await fetchProviderModels(
+        { baseUrl: settings.upstreamBaseUrl, apiKey: settings.upstreamApiKey },
+        { timeoutMs: Math.min(config.requestTimeoutMs, 5000) }
+      );
+      return res.json({ status: 'ok', service: 'benzIA', upstream: settings.upstreamBaseUrl, models: models.length });
+    } catch (error) {
+      return res.status(503).json({
+        status: 'degraded', service: 'benzIA', upstream: settings.upstreamBaseUrl,
+        error: `El proveedor local no está disponible: ${error.message}`
+      });
+    }
   });
 
   const effectiveSettings = () => {
@@ -167,10 +210,12 @@ export function createGatewayApp({ config, store, adminApp, chatApp, liveActivit
     const settings = effectiveSettings();
     if (req.method === 'GET' && path === '/v1/models') {
       const localProvider = { baseUrl: settings.upstreamBaseUrl, apiKey: settings.upstreamApiKey };
-      const providers = accessKey.allowExternalProviders ? settings.externalProviders : [];
+      const providers = accessKey.allowExternalProviders
+        ? settings.externalProviders.filter((provider) => accessKey.externalProviderIds == null || accessKey.externalProviderIds.includes(provider.id))
+        : [];
       const results = await Promise.allSettled([
         fetchProviderModels(localProvider, { timeoutMs: Math.min(config.requestTimeoutMs, 8000) }),
-        ...providers.map((provider) => fetchProviderModels(provider, { timeoutMs: Math.min(config.requestTimeoutMs, 8000) }))
+        ...providers.map((provider) => fetchProviderModels(provider, { timeoutMs: Math.min(config.requestTimeoutMs, EXTERNAL_MODELS_TIMEOUT_MS) }))
       ]);
       const hasAnyModelsResponse = results.some((result) => result.status === 'fulfilled');
       if (!hasAnyModelsResponse) {
@@ -192,12 +237,16 @@ export function createGatewayApp({ config, store, adminApp, chatApp, liveActivit
         ...providers.filter((_provider, index) => results[index + 1].status === 'rejected').map((provider) => provider.id)
       ];
       if (failed.length) res.set('x-benzia-provider-errors', failed.join(','));
-      return res.json({ object: 'list', data: [...localModels, ...externalModels] });
+      const capabilities = await loadModelCapabilities(config.dataDir);
+      return res.json({ object: 'list', data: [...localModels, ...externalModels].map((model) => annotateModel(model, capabilities)) });
     }
 
     const externalRoute = routeForModel(body?.model, settings.externalProviders);
     if (externalRoute && !accessKey.allowExternalProviders) {
       return res.status(403).json(safeError(403, 'Este token sólo puede utilizar el proveedor local.', 'external_provider_forbidden'));
+    }
+    if (externalRoute && accessKey.externalProviderIds && !accessKey.externalProviderIds.includes(externalRoute.provider.id)) {
+      return res.status(403).json(safeError(403, 'Este token no tiene acceso a ese proveedor externo.', 'external_provider_forbidden'));
     }
     const selectedProvider = externalRoute?.provider || {
       id: 'local', name: 'Proveedor IA Local', baseUrl: settings.upstreamBaseUrl, apiKey: settings.upstreamApiKey
@@ -209,8 +258,29 @@ export function createGatewayApp({ config, store, adminApp, chatApp, liveActivit
       upstreamBody.stream_options = { ...upstreamBody.stream_options, include_usage: true };
     }
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(new Error('Upstream timeout')), config.requestTimeoutMs);
-    req.on('aborted', () => controller.abort());
+    let timedOut = false;
+    let clientDisconnected = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      controller.abort(new Error('Upstream timeout'));
+    }, config.requestTimeoutMs);
+    const onRequestAborted = () => {
+      clientDisconnected = true;
+      controller.abort(new Error('El cliente canceló la petición.'));
+    };
+    const onResponseClosed = () => {
+      if (res.writableEnded) return;
+      clientDisconnected = true;
+      controller.abort(new Error('El cliente cerró la conexión.'));
+    };
+    req.once('aborted', onRequestAborted);
+    res.once('close', onResponseClosed);
+    const cleanupRequest = () => {
+      clearTimeout(timeout);
+      req.off('aborted', onRequestAborted);
+      res.off('close', onResponseClosed);
+    };
+    const failureStatus = () => timedOut ? 504 : clientDisconnected ? 499 : 502;
     const trackLive = isInference && isStream;
     if (trackLive) {
       liveActivity?.begin({
@@ -236,14 +306,15 @@ export function createGatewayApp({ config, store, adminApp, chatApp, liveActivit
         signal: controller.signal
       });
     } catch (error) {
-      clearTimeout(timeout);
+      cleanupRequest();
       if (trackLive) liveActivity?.finish(requestId);
-      const timedOut = controller.signal.aborted;
-      const status = timedOut ? 504 : 502;
+      const status = failureStatus();
       const message = timedOut
         ? `${selectedProvider.name} no respondió dentro del tiempo configurado.`
+        : clientDisconnected
+          ? 'El cliente cerró la conexión antes de recibir la respuesta.'
         : `No se pudo conectar con ${selectedProvider.name}: ${error.message}`;
-      await store.recordMetric({
+      await recordMetricSafely(store, {
         id: requestId, at: new Date().toISOString(), keyId: accessKey.id, path,
         model: body?.model || null, provider: selectedProvider.id, status, latencyMs: Date.now() - startedAt,
         inputTokens: 0, outputTokens: 0, usageSource: 'unavailable',
@@ -253,27 +324,30 @@ export function createGatewayApp({ config, store, adminApp, chatApp, liveActivit
         generationDurationMs: null, timeToFirstTokenMs: null,
         stream: isStream
       });
+      if (clientDisconnected || res.headersSent) return;
       return res.status(status).json(safeError(status, message, timedOut ? 'upstream_timeout' : 'upstream_unavailable'));
     }
 
-    clearTimeout(timeout);
     const responseHeaders = pickResponseHeaders(upstream.headers);
     res.status(upstream.status);
     res.set({ ...responseHeaders, 'x-lm-gateway-request-id': requestId });
 
     if (isStream && upstream.body) {
       res.removeHeader('content-length');
+      res.set({ 'cache-control': 'no-cache, no-transform', 'x-accel-buffering': 'no' });
+      res.flushHeaders?.();
       const reader = upstream.body.getReader();
       const decoder = new TextDecoder();
       let sseBuffer = '';
       let lastPayload = {};
       let outputText = '';
       let firstTokenAt = null;
+      let streamError = null;
       try {
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
-          res.write(Buffer.from(value));
+          await writeWithBackpressure(res, Buffer.from(value));
           sseBuffer += decoder.decode(value, { stream: true });
           sseBuffer = parseSseBuffer(sseBuffer, (payload) => {
             lastPayload = payload;
@@ -296,8 +370,19 @@ export function createGatewayApp({ config, store, adminApp, chatApp, liveActivit
         });
         res.end();
       } catch (error) {
-        if (!res.writableEnded) res.end();
+        streamError = error;
+        if (!clientDisconnected && !res.writableEnded) {
+          const status = failureStatus();
+          const message = timedOut
+            ? `${selectedProvider.name} superó el tiempo máximo durante la respuesta.`
+            : `La respuesta de ${selectedProvider.name} se interrumpió antes de completarse.`;
+          try {
+            await writeWithBackpressure(res, `data: ${JSON.stringify(safeError(status, message, timedOut ? 'upstream_timeout' : 'upstream_interrupted'))}\n\n`);
+          } catch { /* El cliente también puede haberse desconectado. */ }
+          if (!res.writableEnded) res.end();
+        }
       }
+      cleanupRequest();
       const completedAt = Date.now();
       const usage = extractUsage(lastPayload, body, outputText);
       const telemetry = extractUpstreamTelemetry(lastPayload, {
@@ -307,16 +392,37 @@ export function createGatewayApp({ config, store, adminApp, chatApp, liveActivit
         completedAt
       });
       liveActivity?.finish(requestId);
-      await store.recordMetric({
+      await recordMetricSafely(store, {
         id: requestId, at: new Date().toISOString(), keyId: accessKey.id, path,
-        model: body?.model || null, provider: selectedProvider.id, status: upstream.status, latencyMs: completedAt - startedAt,
+        model: body?.model || null, provider: selectedProvider.id,
+        status: streamError ? failureStatus() : upstream.status, latencyMs: completedAt - startedAt,
         ...usage, ...telemetry, stream: true
       });
       return;
     }
 
     if (trackLive) liveActivity?.finish(requestId);
-    const responseBuffer = Buffer.from(await upstream.arrayBuffer());
+    let responseBuffer;
+    try {
+      responseBuffer = Buffer.from(await upstream.arrayBuffer());
+    } catch (error) {
+      cleanupRequest();
+      const status = failureStatus();
+      await recordMetricSafely(store, {
+        id: requestId, at: new Date().toISOString(), keyId: accessKey.id, path,
+        model: body?.model || null, provider: selectedProvider.id, status, latencyMs: Date.now() - startedAt,
+        inputTokens: 0, outputTokens: 0, usageSource: 'unavailable',
+        lmCachedInputTokens: null, lmCacheSource: 'unavailable',
+        tokensPerSecond: null, throughputSource: 'unavailable', telemetryVersion: 2,
+        generationDurationMs: null, timeToFirstTokenMs: null, stream: false
+      });
+      if (clientDisconnected || res.headersSent) return;
+      const message = timedOut
+        ? `${selectedProvider.name} superó el tiempo máximo durante la respuesta.`
+        : `La respuesta de ${selectedProvider.name} se interrumpió antes de completarse.`;
+      return res.status(status).json(safeError(status, message, timedOut ? 'upstream_timeout' : 'upstream_interrupted'));
+    }
+    cleanupRequest();
     let payload = {};
     try { payload = JSON.parse(responseBuffer.toString('utf8')); } catch { /* Respuesta binaria o texto. */ }
     const usage = extractUsage(payload, body);
@@ -326,15 +432,15 @@ export function createGatewayApp({ config, store, adminApp, chatApp, liveActivit
       completedAt: Date.now()
     });
     res.send(responseBuffer);
-    await store.recordMetric({
+    await recordMetricSafely(store, {
       id: requestId, at: new Date().toISOString(), keyId: accessKey.id, path,
       model: body?.model || null, provider: selectedProvider.id, status: upstream.status, latencyMs: Date.now() - startedAt,
       ...usage, ...telemetry, stream: false
     });
   });
 
+  app.use(jsonBodyErrorHandler);
   app.use((error, _req, res, _next) => {
-    if (error instanceof SyntaxError) return res.status(400).json(safeError(400, 'El cuerpo JSON no es válido.', 'invalid_json'));
     console.error(error);
     return res.status(500).json(safeError(500, 'Error interno del gateway.'));
   });

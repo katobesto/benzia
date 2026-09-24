@@ -2,6 +2,7 @@ import 'dotenv/config';
 
 import { createAdminApp } from './admin.js';
 import { createChatApp } from './chat.js';
+import { createStatusApp } from './status.js';
 import { loadConfig } from './config.js';
 import { createGatewayApp } from './proxy.js';
 import { SqliteStore } from './store.js';
@@ -21,7 +22,8 @@ const liveActivity = new LiveActivity({ prefillRateReader: createLlamaLogReader(
 
 const adminApp = createAdminApp({ config, store, liveActivity });
 const chatApp = createChatApp({ config, store });
-const gatewayApp = createGatewayApp({ config, store, adminApp, chatApp, liveActivity });
+const statusApp = createStatusApp({ config, store, liveActivity });
+const gatewayApp = createGatewayApp({ config, store, adminApp, chatApp, statusApp, liveActivity });
 
 const adminServer = adminApp.listen(config.adminPort, config.adminHost, () => {
   console.log(`Panel:   http://localhost:${config.adminPort}`);
@@ -34,17 +36,30 @@ const adminServer = adminApp.listen(config.adminPort, config.adminHost, () => {
 const gatewayServer = gatewayApp.listen(config.gatewayPort, config.gatewayHost, () => {
   console.log(`Gateway: ${config.publicGatewayUrl}/v1`);
   console.log(`Dashboard público: ${config.publicGatewayUrl}/dashboard`);
+  console.log(`Estado (token de usuario): ${config.publicGatewayUrl}/status`);
   console.log(`Chat público: ${config.publicGatewayUrl}/chat`);
   console.log(`Proveedor IA Local: ${config.upstreamBaseUrl}`);
 });
 
+let shuttingDown = false;
+const closeServer = (server) => new Promise((resolve) => server.close(resolve));
+
 const shutdown = async (signal) => {
+  if (shuttingDown) return;
+  shuttingDown = true;
   console.log(`\n${signal}: cerrando servicios...`);
-  adminServer.close();
-  gatewayServer.close();
+  const forceExit = setTimeout(() => {
+    console.error('El cierre gradual superó 10 segundos; terminando el proceso.');
+    process.exit(1);
+  }, 10_000);
+  forceExit.unref();
+  adminServer.closeIdleConnections?.();
+  gatewayServer.closeIdleConnections?.();
+  await Promise.allSettled([closeServer(adminServer), closeServer(gatewayServer)]);
   store.close();
-  process.exit(0);
+  clearTimeout(forceExit);
+  process.exitCode = 0;
 };
 
-process.on('SIGINT', () => shutdown('SIGINT'));
-process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => void shutdown('SIGINT'));
+process.on('SIGTERM', () => void shutdown('SIGTERM'));

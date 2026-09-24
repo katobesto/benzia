@@ -508,3 +508,31 @@ td strong { font-size: 12px; }
   .opencode-output-actions { grid-template-columns: 1fr; }
   .opencode-json { min-height: 280px; max-height: 440px; padding: 14px; font-size: 10px; }
 }
+
+/* Read-only status view (/status): dashboard only, no side menu. */
+body.status-mode .sidebar,
+body.status-mode .mobile-menu { display: none; }
+body.status-mode .app-shell { grid-template-columns: minmax(0, 1fr); }
+body.status-mode .main-area { grid-column: 1; }
+
+/* Claves API: filtro de proveedores externos visibles por clave. */
+.provider-filter-card { width: min(480px, calc(100vw - 36px)); }
+.provider-filter-list { display: grid; gap: 8px; max-height: 300px; overflow-y: auto; margin: 0 0 18px; padding-right: 4px; }
+.provider-filter-row { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 12px; align-items: center; padding: 10px 12px; margin: 0; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; }
+.provider-filter-row:hover { border-color: var(--border-bright); background: rgba(255,255,255,.04); }
+/* Neutraliza las reglas generales de input (min-width: 170px / height: 42px)
+   para que el checkbox conserve su tamaño nativo. */
+.provider-filter-card .provider-filter-row input[type="checkbox"] {
+  width: auto;
+  min-width: 0;
+  height: auto;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  accent-color: var(--cyan);
+}
+.provider-filter-info { min-width: 0; }
+.provider-filter-info strong { display: block; font-size: 13px; }
+.provider-filter-info small { color: var(--muted-2); font: 500 11px var(--mono); overflow-wrap: anywhere; }

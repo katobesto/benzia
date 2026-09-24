@@ -8,6 +8,7 @@ import multer from 'multer';
 import { accessAuth } from './access-auth.js';
 import { searchBrave, validateSearchQuery } from './brave-search.js';
 import { DOCUMENT_MAX_BYTES, documentKind, extractDocument } from './document-extractor.js';
+import { jsonBodyErrorHandler } from './http-errors.js';
 import { runResearch } from './research.js';
 
 const chatPublicDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../chat-public');
@@ -117,9 +118,14 @@ export function createChatApp({ config, store }) {
   app.get('/vendor/marked.umd.js', (_req, res) => res.sendFile(path.join(vendorDir, 'marked/lib/marked.umd.js')));
   app.get('/vendor/purify.min.js', (_req, res) => res.sendFile(path.join(vendorDir, 'dompurify/dist/purify.min.js')));
   app.use(express.static(chatPublicDir, { index: false, fallthrough: true }));
-  app.get('/', (_req, res) => res.sendFile(path.join(chatPublicDir, 'index.html')));
+  app.get('/', (_req, res) => {
+    res.set('cache-control', 'no-store');
+    res.sendFile(path.join(chatPublicDir, 'index.html'));
+  });
   app.use('/api', (_req, res) => res.status(404).json({ error: 'Ruta de chat no encontrada.' }));
   app.get('*', (_req, res) => res.status(404).send('No encontrado'));
+
+  app.use(jsonBodyErrorHandler);
 
   return app;
 }

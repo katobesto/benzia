@@ -24,6 +24,7 @@ test('sirve la interfaz de chat sin exponer su configuración', async (t) => {
 
   const page = await fetch(`${baseUrl}/`);
   assert.equal(page.status, 200);
+  assert.equal(page.headers.get('cache-control'), 'no-store');
   assert.match(await page.text(), /benzIA Chat/);
 
   const stylesheet = await fetch(`${baseUrl}/chat.css`);
