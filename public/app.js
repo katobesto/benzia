@@ -211,7 +211,7 @@ function renderOverview() {
   const arcDeg = Math.round((lmRate || 0) * 360);
   donutEl.style.setProperty('--lm-rate-deg', `${arcDeg}deg`);
   const stops = arcDeg > 0
-    ? `#66ecca 0deg, #38cfe0 ${Math.round(arcDeg / 2)}deg, #5b9dff ${arcDeg}deg, var(--surface-3) ${arcDeg}deg`
+    ? `#8b7cf6 0deg, #5b8cf6 ${Math.round(arcDeg / 2)}deg, #7dd3fc ${arcDeg}deg, var(--surface-3) ${arcDeg}deg`
     : 'var(--surface-3) 0';
   donutEl.style.background = `conic-gradient(${stops})`;
   $('#lm-cache-note').textContent = lmRate === null
@@ -267,7 +267,7 @@ function renderTimeline(points) {
   for (let index = 0; index <= 4; index += 1) {
     const y = pad.top + chartH * index / 4;
     ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(width - pad.right, y); ctx.stroke();
-    ctx.fillStyle = '#8b8b8b'; ctx.textAlign = 'left'; ctx.fillText(compactNumber.format(maxValue * (1 - index / 4)), 3, y + 3);
+    ctx.fillStyle = '#6b7188'; ctx.textAlign = 'left'; ctx.fillText(compactNumber.format(maxValue * (1 - index / 4)), 3, y + 3);
   }
   const xFor = (index) => pad.left + (points.length === 1 ? chartW / 2 : chartW * index / (points.length - 1));
   const yFor = (value) => pad.top + chartH - value / maxValue * chartH;
@@ -282,7 +282,7 @@ function renderTimeline(points) {
   };
   const drawLine = (key, from, to) => {
     ctx.save();
-    ctx.shadowColor = 'rgba(56,207,224,.35)'; ctx.shadowBlur = 8; ctx.shadowOffsetY = 2;
+    ctx.shadowColor = 'rgba(109,94,242,.35)'; ctx.shadowBlur = 8; ctx.shadowOffsetY = 2;
     ctx.beginPath();
     points.forEach((point, index) => index ? ctx.lineTo(xFor(index), yFor(point[key])) : ctx.moveTo(xFor(index), yFor(point[key])));
     ctx.strokeStyle = lineGradient(from, to); ctx.lineWidth = 2.4; ctx.lineJoin = 'round'; ctx.stroke();
@@ -290,8 +290,8 @@ function renderTimeline(points) {
     ctx.lineTo(xFor(points.length - 1), pad.top + chartH); ctx.lineTo(xFor(0), pad.top + chartH); ctx.closePath();
     ctx.fillStyle = fillGradient(from + '55', from + '05'); ctx.fill();
   };
-  drawLine('inputTokens', '#66ecca', '#38cfe0');
-  drawLine('outputTokens', '#38cfe0', '#5b9dff');
+  drawLine('inputTokens', '#8b7cf6', '#5b8cf6');
+  drawLine('outputTokens', '#5b8cf6', '#7dd3fc');
   const labelCount = Math.min(5, points.length);
   for (let index = 0; index < labelCount; index += 1) {
     const pointIndex = Math.round(index * (points.length - 1) / Math.max(1, labelCount - 1));
@@ -299,7 +299,7 @@ function renderTimeline(points) {
     const label = Number($('#range-filter').value) > 72
       ? date.toLocaleDateString('es-ES', { day: '2-digit', month: 'short' })
       : date.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
-    ctx.fillStyle = '#8b8b8b'; ctx.textAlign = index === 0 ? 'left' : index === labelCount - 1 ? 'right' : 'center'; ctx.fillText(label, xFor(pointIndex), height - 9);
+    ctx.fillStyle = '#6b7188'; ctx.textAlign = index === 0 ? 'left' : index === labelCount - 1 ? 'right' : 'center'; ctx.fillText(label, xFor(pointIndex), height - 9);
   }
 }
 
