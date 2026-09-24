@@ -412,22 +412,29 @@ td strong { font-size: 12px; }
   .settings-layout { grid-template-columns: 1fr; }
   .settings-card, .runtime-card { grid-column: 1; grid-row: auto; }
 }
+html { overflow-x: hidden; }
 @media (max-width: 760px) {
   .app-shell { display: block; }
   .sidebar { transform: translateX(-100%); transition: transform .2s ease; box-shadow: 15px 0 45px rgba(0,0,0,.45); }
   .sidebar.open { transform: none; }
   .main-area { min-width: 0; }
-  .app-header { height: 64px; padding: 0 18px; }
+  .app-header { height: 64px; padding: 0 16px; }
   .mobile-menu { display: inline-block; margin-right: 10px; }
-  .telemetry { display: none; }
-  .page { padding: 28px 17px 50px; min-height: calc(100vh - 64px); }
-  .page-heading { align-items: flex-start; flex-direction: column; min-height: 0; margin-bottom: 26px; }
-  .filters { width: 100%; }
-  .filters label { width: 50%; }
+    .telemetry { display: none; }
+    /* Evita el zoom automático de iOS: campos >= 16px (heredan 15px y el
+       navegador escalaba la página al enfocar cualquier control). */
+    input, select, textarea { font-size: 16px; }
+  .page { padding: 22px 16px 48px; min-height: calc(100vh - 64px); }
+  .page-heading { align-items: flex-start; flex-direction: column; min-height: 0; margin-bottom: 22px; }
+  .page-heading h1 { font-size: 30px; }
+  .page-heading > div > p:last-child { font-size: 13px; }
+  /* Filtros: una columna a ancho completo (sin el flex justify-end que los
+     dejaba a la mitad derecha con hueco vacío a la izquierda). */
+  .filters { display: grid; grid-template-columns: 1fr; gap: 10px; width: 100%; align-items: stretch; justify-content: stretch; }
+  .filters label { width: 100%; min-width: 0; }
+  .filters select, .filters input[type="date"] { width: 100%; min-width: 0; }
+  .filter-clear { grid-column: 1; width: 100%; }
   .activity-filters label:first-child { width: 100%; }
-  .filters select { width: 100%; min-width: 0; }
-  .filters input[type="date"] { width: 100%; min-width: 0; }
-  .filter-clear { width: 100%; }
   .chart-legend { justify-content: flex-start; gap: 8px 12px; }
   .metrics-grid { grid-template-columns: 1fr; }
   .donut-wrap { grid-template-columns: 1fr; grid-template-rows: auto; }
