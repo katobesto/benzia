@@ -25,6 +25,8 @@
   --grad-input-bar: linear-gradient(90deg, #66ecca, #38cfe0);
   --grad-output-bar: linear-gradient(90deg, #38cfe0, #5b9dff);
   --grad-surface: linear-gradient(180deg, rgba(255,255,255,.045), rgba(255,255,255,0) 62%);
+  --grad-card: linear-gradient(135deg, rgba(56,207,224,.16) 0%, rgba(91,157,255,.05) 42%, rgba(255,255,255,0) 78%);
+  --grad-card-strong: linear-gradient(135deg, rgba(102,236,202,.22) 0%, rgba(56,207,224,.12) 40%, rgba(91,157,255,.06) 70%, rgba(255,255,255,0) 100%);
   --grad-nav: linear-gradient(90deg, rgba(102,236,202,.16), rgba(56,207,224,.05) 55%, rgba(91,157,255,.03));
   --grad-banner: linear-gradient(135deg, rgba(102,236,202,.12), rgba(56,207,224,.06) 55%, rgba(91,157,255,.05));
   --grad-line-input: linear-gradient(90deg, #66ecca, #38cfe0);
@@ -566,46 +568,61 @@ body { background: transparent; }
 body:has(.auth-screen.auth-required) { overflow: hidden; }
 
 /* Brand + nav accent */
-.brand-icon { background: var(--grad-brand); box-shadow: var(--glow-accent); }
+.brand-icon { background: var(--grad-brand); }
 .auth-brand span { background: var(--grad-brand); }
 .nav-link.active { background: var(--grad-nav); border-left: 2px solid transparent; border-image: var(--grad-input-bar) 1; }
 .nav-link.active svg { color: #6fe8d6; }
 .nav-link:hover { background: rgba(255,255,255,.05); }
-.sidebar { background: linear-gradient(180deg, rgba(255,255,255,.015), rgba(255,255,255,0) 40%), var(--sidebar); border-right: 1px solid var(--border); }
+.sidebar { background: linear-gradient(180deg, rgba(255,255,255,.02), rgba(255,255,255,0) 40%), var(--sidebar); border-right: 1px solid var(--border); }
 
-/* Primary action: gradient fill + glow */
-.primary-button { border: 0; background: var(--grad-btn); color: #04202a; box-shadow: var(--glow-btn); }
-.primary-button:hover { filter: brightness(1.07) saturate(1.05); transform: translateY(-1px); box-shadow: 0 10px 30px rgba(56,207,224,.42); }
+/* Primary action: gradient fill (soft drop, no halo) */
+.primary-button { border: 0; background: var(--grad-btn); color: #04202a; box-shadow: 0 2px 8px rgba(0,0,0,.25); }
+.primary-button:hover { filter: brightness(1.07) saturate(1.05); transform: translateY(-1px); box-shadow: 0 4px 14px rgba(0,0,0,.32); }
 .primary-button:active { transform: translateY(0); }
 
-/* Cards & panels: subtle top-light gradient + accent ring on hover */
-.metric-card, .panel { background: var(--surface); box-shadow: var(--glow-accent); }
-.metric-card { position: relative; overflow: hidden; background: var(--grad-surface), var(--surface); }
-.metric-card::before { content: ""; position: absolute; inset: 0 0 auto 0; height: 2px; background: var(--grad-accent); opacity: .55; }
-.metric-card:hover, .panel:hover { box-shadow: 0 12px 40px rgba(0,0,0,.28), var(--glow-accent); }
-.panel { background: var(--grad-surface), var(--surface); }
-.metric-icon.cyan, .metric-icon.green { background: var(--grad-accent); color: #04202a; box-shadow: 0 4px 16px rgba(56,207,224,.28); }
-.metric-icon.blue { background: linear-gradient(120deg, #38cfe0, #5b9dff); color: #04141c; box-shadow: 0 4px 16px rgba(91,157,255,.28); }
+/* Cards & panels: the gradient lives INSIDE the surface (top-left tint),
+   clipped to the rounded card; no outer glow. */
+.metric-card, .panel {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: linear-gradient(var(--surface), var(--surface)) padding-box,
+              linear-gradient(135deg, rgba(56,207,224,.45) 0%, rgba(91,157,255,.2) 45%, rgba(255,255,255,.06) 100%) border-box;
+  box-shadow: 0 8px 24px rgba(0,0,0,.18);
+}
+.metric-card::before {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: var(--grad-card-strong);
+}
+.panel::before {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: var(--grad-card);
+}
+.metric-card:hover { border-color: var(--border-bright); }
+/* Panels contain positioned content: keep ::before behind it. */
+.metric-card > *, .panel > * { position: relative; }
+.metric-icon.cyan, .metric-icon.green { background: var(--grad-accent); color: #04202a; }
+.metric-icon.blue { background: linear-gradient(120deg, #38cfe0, #5b9dff); color: #04141c; }
 .metric-icon.amber { background: linear-gradient(120deg, #f0c379, #e0a45a); color: #241703; }
 
-/* Big numbers get a subtle gradient tint for a premium feel */
+/* Big numbers get a subtle vertical gradient tint for a premium feel */
 .metric-card > strong { background: linear-gradient(180deg, #ffffff, #cfe8e6); -webkit-background-clip: text; background-clip: text; color: transparent; }
 
 /* Live status / emissions */
-.live-state.active { border-color: rgba(102,236,202,.35); background: rgba(102,236,202,.08); box-shadow: inset 0 0 24px rgba(102,236,202,.06); }
-.emission-indicator.emitting i { background: #6fe8d6; box-shadow: 0 0 10px rgba(111,232,214,.8); }
-.status-dot.online { background: #6fe8d6; box-shadow: 0 0 0 4px rgba(111,232,214,.12), 0 0 14px rgba(111,232,214,.4); }
+.live-state.active { border-color: rgba(102,236,202,.35); background: rgba(102,236,202,.08); }
+.emission-indicator.emitting i { background: #6fe8d6; box-shadow: 0 0 9px rgba(111,232,214,.7); }
+.status-dot.online { background: #6fe8d6; box-shadow: 0 0 0 4px rgba(111,232,214,.12), 0 0 12px rgba(111,232,214,.35); }
 
 /* Progress / distribution bars → gradients */
 .bar-input { background: var(--grad-input-bar); }
 .bar-output { background: var(--grad-output-bar); }
 
 /* Cache donut: base fallback (app.js repaints the arc with a teal→blue gradient) */
-.donut { background: conic-gradient(#66ecca 0deg, #38cfe0 var(--lm-rate-deg, 0deg), var(--surface-3) 0deg); box-shadow: inset 0 0 0 1px rgba(255,255,255,.04); }
-.donut::after { box-shadow: 0 0 24px rgba(56,207,224,.15); }
+.donut { background: conic-gradient(#66ecca 0deg, #38cfe0 var(--lm-rate-deg, 0deg), var(--surface-3) 0deg); }
 
-/* Info banners + notes → gradient tint */
-.info-banner { background: var(--grad-banner); border-color: rgba(102,236,202,.28); box-shadow: var(--glow-accent); }
+/* Info banners + notes → gradient tint inside */
+.info-banner { background: var(--grad-banner); border-color: rgba(102,236,202,.28); }
 .info-icon { border-color: #6fe8d6; color: #6fe8d6; }
 .brave-note { border-left-color: #6fe8d6; background: linear-gradient(135deg, rgba(102,236,202,.09), rgba(56,207,224,.04)); }
 .lm-cache-summary { background: var(--grad-surface), var(--surface-2); }
@@ -619,7 +636,7 @@ input:focus, select:focus, textarea:focus { border-color: #38cfe0; box-shadow: 0
 /* Header: soft gradient underlay */
 .app-header { background: linear-gradient(180deg, rgba(20,20,20,.86), rgba(20,20,20,.55)); backdrop-filter: blur(16px); }
 .telemetry { background: linear-gradient(135deg, rgba(102,236,202,.10), rgba(56,207,224,.05)); border: 1px solid rgba(102,236,202,.18); color: #7ff0da; }
-.telemetry i { background: #6fe8d6; box-shadow: 0 0 9px #6fe8d6; }
+.telemetry i { background: #6fe8d6; box-shadow: 0 0 8px #6fe8d6; }
 .auth-screen { background: transparent; }
 .auth-screen::before { display: block; }
 
