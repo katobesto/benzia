@@ -17,6 +17,19 @@
   --red: #ff8585;
   --font: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --mono: ui-monospace, "SFMono-Regular", Consolas, monospace;
+
+  /* Modern gradient language (teal → cyan → blue, harmonised with the accent). */
+  --grad-brand: linear-gradient(135deg, #66ecca 0%, #38cfe0 52%, #5b9dff 120%);
+  --grad-accent: linear-gradient(120deg, #66ecca, #38cfe0);
+  --grad-btn: linear-gradient(135deg, #6ff0d2 0%, #34cfe0 100%);
+  --grad-input-bar: linear-gradient(90deg, #66ecca, #38cfe0);
+  --grad-output-bar: linear-gradient(90deg, #38cfe0, #5b9dff);
+  --grad-surface: linear-gradient(180deg, rgba(255,255,255,.045), rgba(255,255,255,0) 62%);
+  --grad-nav: linear-gradient(90deg, rgba(102,236,202,.16), rgba(56,207,224,.05) 55%, rgba(91,157,255,.03));
+  --grad-banner: linear-gradient(135deg, rgba(102,236,202,.12), rgba(56,207,224,.06) 55%, rgba(91,157,255,.05));
+  --grad-line-input: linear-gradient(90deg, #66ecca, #38cfe0);
+  --glow-accent: 0 8px 30px rgba(56,207,224,.28);
+  --glow-btn: 0 6px 22px rgba(56,207,224,.30);
 }
 
 * { box-sizing: border-box; }
@@ -536,3 +549,80 @@ body.status-mode .main-area { grid-column: 1; }
 .provider-filter-info { min-width: 0; }
 .provider-filter-info strong { display: block; font-size: 13px; }
 .provider-filter-info small { color: var(--muted-2); font: 500 11px var(--mono); overflow-wrap: anywhere; }
+
+/* ============================================================
+   Modern gradient & glow pass (applied last, wins over base).
+   Adds an ambient background, gradient buttons, gradient nav,
+   surface gradients on cards, and glow accents.
+   ============================================================ */
+html {
+  background:
+    radial-gradient(1200px 620px at 12% -8%, rgba(56,207,224,.16), transparent 58%),
+    radial-gradient(1000px 560px at 108% -6%, rgba(91,157,255,.14), transparent 55%),
+    radial-gradient(900px 900px at 50% 122%, rgba(102,236,202,.09), transparent 60%),
+    var(--bg);
+}
+body { background: transparent; }
+body:has(.auth-screen.auth-required) { overflow: hidden; }
+
+/* Brand + nav accent */
+.brand-icon { background: var(--grad-brand); box-shadow: var(--glow-accent); }
+.auth-brand span { background: var(--grad-brand); }
+.nav-link.active { background: var(--grad-nav); border-left: 2px solid transparent; border-image: var(--grad-input-bar) 1; }
+.nav-link.active svg { color: #6fe8d6; }
+.nav-link:hover { background: rgba(255,255,255,.05); }
+.sidebar { background: linear-gradient(180deg, rgba(255,255,255,.015), rgba(255,255,255,0) 40%), var(--sidebar); border-right: 1px solid var(--border); }
+
+/* Primary action: gradient fill + glow */
+.primary-button { border: 0; background: var(--grad-btn); color: #04202a; box-shadow: var(--glow-btn); }
+.primary-button:hover { filter: brightness(1.07) saturate(1.05); transform: translateY(-1px); box-shadow: 0 10px 30px rgba(56,207,224,.42); }
+.primary-button:active { transform: translateY(0); }
+
+/* Cards & panels: subtle top-light gradient + accent ring on hover */
+.metric-card, .panel { background: var(--surface); box-shadow: var(--glow-accent); }
+.metric-card { position: relative; overflow: hidden; background: var(--grad-surface), var(--surface); }
+.metric-card::before { content: ""; position: absolute; inset: 0 0 auto 0; height: 2px; background: var(--grad-accent); opacity: .55; }
+.metric-card:hover, .panel:hover { box-shadow: 0 12px 40px rgba(0,0,0,.28), var(--glow-accent); }
+.panel { background: var(--grad-surface), var(--surface); }
+.metric-icon.cyan, .metric-icon.green { background: var(--grad-accent); color: #04202a; box-shadow: 0 4px 16px rgba(56,207,224,.28); }
+.metric-icon.blue { background: linear-gradient(120deg, #38cfe0, #5b9dff); color: #04141c; box-shadow: 0 4px 16px rgba(91,157,255,.28); }
+.metric-icon.amber { background: linear-gradient(120deg, #f0c379, #e0a45a); color: #241703; }
+
+/* Big numbers get a subtle gradient tint for a premium feel */
+.metric-card > strong { background: linear-gradient(180deg, #ffffff, #cfe8e6); -webkit-background-clip: text; background-clip: text; color: transparent; }
+
+/* Live status / emissions */
+.live-state.active { border-color: rgba(102,236,202,.35); background: rgba(102,236,202,.08); box-shadow: inset 0 0 24px rgba(102,236,202,.06); }
+.emission-indicator.emitting i { background: #6fe8d6; box-shadow: 0 0 10px rgba(111,232,214,.8); }
+.status-dot.online { background: #6fe8d6; box-shadow: 0 0 0 4px rgba(111,232,214,.12), 0 0 14px rgba(111,232,214,.4); }
+
+/* Progress / distribution bars → gradients */
+.bar-input { background: var(--grad-input-bar); }
+.bar-output { background: var(--grad-output-bar); }
+
+/* Cache donut: base fallback (app.js repaints the arc with a teal→blue gradient) */
+.donut { background: conic-gradient(#66ecca 0deg, #38cfe0 var(--lm-rate-deg, 0deg), var(--surface-3) 0deg); box-shadow: inset 0 0 0 1px rgba(255,255,255,.04); }
+.donut::after { box-shadow: 0 0 24px rgba(56,207,224,.15); }
+
+/* Info banners + notes → gradient tint */
+.info-banner { background: var(--grad-banner); border-color: rgba(102,236,202,.28); box-shadow: var(--glow-accent); }
+.info-icon { border-color: #6fe8d6; color: #6fe8d6; }
+.brave-note { border-left-color: #6fe8d6; background: linear-gradient(135deg, rgba(102,236,202,.09), rgba(56,207,224,.04)); }
+.lm-cache-summary { background: var(--grad-surface), var(--surface-2); }
+
+/* Inputs: gradient focus ring instead of flat */
+input:focus, select:focus, textarea:focus { border-color: #38cfe0; box-shadow: 0 0 0 3px rgba(56,207,224,.18); }
+.key-provider-access { background-color: var(--surface-2); }
+.secret-field { background: linear-gradient(180deg, rgba(102,236,202,.05), rgba(0,0,0,.2)); }
+.opencode-json { background: linear-gradient(180deg, #161616, #121212); }
+
+/* Header: soft gradient underlay */
+.app-header { background: linear-gradient(180deg, rgba(20,20,20,.86), rgba(20,20,20,.55)); backdrop-filter: blur(16px); }
+.telemetry { background: linear-gradient(135deg, rgba(102,236,202,.10), rgba(56,207,224,.05)); border: 1px solid rgba(102,236,202,.18); color: #7ff0da; }
+.telemetry i { background: #6fe8d6; box-shadow: 0 0 9px #6fe8d6; }
+.auth-screen { background: transparent; }
+.auth-screen::before { display: block; }
+
+/* State pills: keep semantic colors, soften with gradient wash */
+.state-pill { background: linear-gradient(180deg, rgba(111,232,214,.12), rgba(111,232,214,.05)); }
+.row-action:hover { background: rgba(255,255,255,.06); }
