@@ -207,13 +207,7 @@ function renderOverview() {
   $('#lm-cache-cached').textContent = compactNumber.format(totals.lmCachedInputTokens);
   $('#lm-cache-uncached').textContent = compactNumber.format(lmUncachedInputTokens);
   $('#lm-cache-reports').textContent = exactNumber.format(totals.lmCacheReportedRequests);
-  const donutEl = $('#lm-cache-donut');
-  const arcDeg = Math.round((lmRate || 0) * 360);
-  donutEl.style.setProperty('--lm-rate-deg', `${arcDeg}deg`);
-  const stops = arcDeg > 0
-    ? `#8b7cf6 0deg, #5b8cf6 ${Math.round(arcDeg / 2)}deg, #7dd3fc ${arcDeg}deg, var(--surface-3) ${arcDeg}deg`
-    : 'var(--surface-3) 0';
-  donutEl.style.background = `conic-gradient(${stops})`;
+  $('#lm-cache-donut').style.background = `conic-gradient(var(--cyan) ${(lmRate || 0) * 360}deg, var(--surface-3) 0)`;
   $('#lm-cache-note').textContent = lmRate === null
     ? 'El proveedor no ha enviado cached_tokens en este periodo; no equivale a un 0 % de reutilización'
     : `${exactNumber.format(totals.lmCachedInputTokens)} de ${exactNumber.format(totals.lmReportedInputTokens)} tokens de entrada fueron reutilizados por el motor`;
@@ -267,31 +261,19 @@ function renderTimeline(points) {
   for (let index = 0; index <= 4; index += 1) {
     const y = pad.top + chartH * index / 4;
     ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(width - pad.right, y); ctx.stroke();
-    ctx.fillStyle = '#6b7188'; ctx.textAlign = 'left'; ctx.fillText(compactNumber.format(maxValue * (1 - index / 4)), 3, y + 3);
+    ctx.fillStyle = '#8b8b8b'; ctx.textAlign = 'left'; ctx.fillText(compactNumber.format(maxValue * (1 - index / 4)), 3, y + 3);
   }
   const xFor = (index) => pad.left + (points.length === 1 ? chartW / 2 : chartW * index / (points.length - 1));
   const yFor = (value) => pad.top + chartH - value / maxValue * chartH;
   chartModel = { points, xFor, yFor, width, height };
-  const lineGradient = (c1, c2) => {
-    const g = ctx.createLinearGradient(pad.left, 0, width - pad.right, 0);
-    g.addColorStop(0, c1); g.addColorStop(1, c2); return g;
-  };
-  const fillGradient = (top, bottom) => {
-    const g = ctx.createLinearGradient(0, pad.top, 0, pad.top + chartH);
-    g.addColorStop(0, top); g.addColorStop(1, bottom); return g;
-  };
-  const drawLine = (key, from, to) => {
-    ctx.save();
-    ctx.shadowColor = 'rgba(109,94,242,.35)'; ctx.shadowBlur = 8; ctx.shadowOffsetY = 2;
+  const drawLine = (key, color, fill) => {
     ctx.beginPath();
     points.forEach((point, index) => index ? ctx.lineTo(xFor(index), yFor(point[key])) : ctx.moveTo(xFor(index), yFor(point[key])));
-    ctx.strokeStyle = lineGradient(from, to); ctx.lineWidth = 2.4; ctx.lineJoin = 'round'; ctx.stroke();
-    ctx.restore();
-    ctx.lineTo(xFor(points.length - 1), pad.top + chartH); ctx.lineTo(xFor(0), pad.top + chartH); ctx.closePath();
-    ctx.fillStyle = fillGradient(from + '55', from + '05'); ctx.fill();
+    ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.lineJoin = 'round'; ctx.stroke();
+    ctx.lineTo(xFor(points.length - 1), pad.top + chartH); ctx.lineTo(xFor(0), pad.top + chartH); ctx.closePath(); ctx.fillStyle = fill; ctx.fill();
   };
-  drawLine('inputTokens', '#8b7cf6', '#5b8cf6');
-  drawLine('outputTokens', '#5b8cf6', '#7dd3fc');
+  drawLine('inputTokens', '#59dcb5', 'rgba(89,220,181,.10)');
+  drawLine('outputTokens', '#79d9ff', 'rgba(121,217,255,.07)');
   const labelCount = Math.min(5, points.length);
   for (let index = 0; index < labelCount; index += 1) {
     const pointIndex = Math.round(index * (points.length - 1) / Math.max(1, labelCount - 1));
@@ -299,7 +281,7 @@ function renderTimeline(points) {
     const label = Number($('#range-filter').value) > 72
       ? date.toLocaleDateString('es-ES', { day: '2-digit', month: 'short' })
       : date.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
-    ctx.fillStyle = '#6b7188'; ctx.textAlign = index === 0 ? 'left' : index === labelCount - 1 ? 'right' : 'center'; ctx.fillText(label, xFor(pointIndex), height - 9);
+    ctx.fillStyle = '#8b8b8b'; ctx.textAlign = index === 0 ? 'left' : index === labelCount - 1 ? 'right' : 'center'; ctx.fillText(label, xFor(pointIndex), height - 9);
   }
 }
 
