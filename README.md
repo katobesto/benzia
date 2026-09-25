@@ -145,6 +145,29 @@ docker compose up -d --build
 
 El compose expone el panel sólo en localhost y usa `host.docker.internal` para llegar a Proveedor IA Local en el host.
 
+### Despliegue en Coolify / VPS
+
+El `Dockerfile` está preparado para desplegar benzIA como una aplicación Docker en Coolify:
+
+1. Cree una aplicación desde el repositorio Git y seleccione **Dockerfile** como método de build.
+2. Use el puerto público interno `3401`.
+3. Añada un volumen persistente montado en `/app/data`; ahí se guarda `gateway.sqlite` y la configuración persistente.
+4. Configure las variables de entorno, como mínimo:
+
+   ```text
+   ADMIN_TOKEN=<secreto-largo-y-unico>
+   GATEWAY_HOST=0.0.0.0
+   GATEWAY_PORT=3401
+   ADMIN_HOST=127.0.0.1
+   DATA_DIR=/app/data
+   LM_STUDIO_BASE_URL=https://<endpoint-del-proveedor-compatible>
+   PUBLIC_GATEWAY_URL=https://<dominio-publico>
+   ```
+
+5. Configure el dominio y TLS desde Coolify. Los clientes usarán `https://<dominio-publico>/v1` y el panel autenticado estará en `https://<dominio-publico>/dashboard`.
+
+En un VPS no se debe usar `127.0.0.1:1234` para `LM_STUDIO_BASE_URL` salvo que el proveedor esté dentro del mismo contenedor. Use la IP privada, el nombre DNS interno o una red Docker compartida. No publique el puerto 3400: el panel administrativo queda ligado al contenedor y se accede mediante `/dashboard` en el gateway autenticado.
+
 ## Producción
 
 benzIA está pensado para redes de confianza. Para acceso por Internet, colóquelo detrás de Caddy, nginx o un túnel con TLS; limite el panel a localhost/VPN; proteja y copie el volumen `data`; y no reutilice `ADMIN_TOKEN` como clave de usuario.
