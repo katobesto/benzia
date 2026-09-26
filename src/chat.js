@@ -48,7 +48,8 @@ export function createChatApp({ config, store }) {
     res.json({
       endpoint: `${gatewayBaseUrl}/v1`,
       identity: { id: req.accessKey.id, name: req.accessKey.name },
-      webSearchAvailable: Boolean(braveSettings().apiKey)
+      webSearchAvailable: Boolean(braveSettings().apiKey),
+      paused: Boolean(req.accessKey.pausedAt)
     });
   });
 

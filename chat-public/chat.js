@@ -41,6 +41,12 @@ const state = {
   endpoint: '',
   identity: null,
   models: [],
+  failedModels: new Set(),
+  unknownModels: new Set(),
+  hideFailedModels: false,
+  modelHealthRunning: false,
+  modelHealthController: null,
+  modelHealthProgress: { completed: 0, total: 0 },
   conversations: [],
   activeId: '',
   pendingAttachments: [],
@@ -189,7 +195,7 @@ function activeConversation() {
 }
 
 function selectedModel() {
-  return $('#model-select').value || state.models[0] || '';
+  return $('#model-select').value || state.models.find((model) => !state.hideFailedModels || !state.failedModels.has(model)) || '';
 }
 
 function createConversation() {
@@ -412,7 +418,9 @@ function renderHistory() {
       if (state.generating) return;
       state.activeId = conversation.id;
       localStorage.setItem(ACTIVE_KEY, state.activeId);
-      if (state.models.includes(conversation.model)) $('#model-select').value = conversation.model;
+      const visibleModels = state.models.filter((model) => !state.hideFailedModels || !state.failedModels.has(model));
+      if (visibleModels.includes(conversation.model)) $('#model-select').value = conversation.model;
+      else if (visibleModels.length) $('#model-select').value = visibleModels[0];
       renderAll({ scrollToEnd: true });
       closeRail();
     };
@@ -1003,6 +1011,13 @@ async function connect(token) {
   if (!configResponse.ok) throw new Error(configResponse.status === 401 ? 'El token no es válido o ha sido revocado.' : await readError(configResponse));
   const config = await configResponse.json();
 
+  state.modelHealthController?.abort();
+  state.modelHealthController = null;
+  state.modelHealthRunning = false;
+  state.modelHealthProgress = { completed: 0, total: 0 };
+  state.failedModels.clear();
+  state.unknownModels.clear();
+  state.hideFailedModels = false;
   state.token = token;
   state.endpoint = config.endpoint;
   state.identity = config.identity;
@@ -1056,14 +1071,135 @@ function populateModels() {
   const select = $('#model-select');
   const conversation = activeConversation();
   const remembered = conversation?.model || localStorage.getItem(MODEL_KEY) || '';
-  select.replaceChildren(...state.models.map((model) => {
+  const visibleModels = state.models.filter((model) => !state.hideFailedModels || !state.failedModels.has(model));
+  const options = visibleModels.map((model) => {
     const option = document.createElement('option');
     option.value = model;
-    option.textContent = model;
+    option.textContent = state.failedModels.has(model)
+      ? `${model} · sin respuesta`
+      : state.unknownModels.has(model) ? `${model} · revisar` : model;
     return option;
-  }));
-  select.value = state.models.includes(remembered) ? remembered : state.models[0];
-  localStorage.setItem(MODEL_KEY, select.value);
+  });
+  if (!options.length) {
+    const option = document.createElement('option');
+    option.value = '';
+    option.disabled = true;
+    option.textContent = state.failedModels.size ? 'Todos los modelos han fallado' : 'Sin modelos disponibles';
+    options.push(option);
+  }
+  select.replaceChildren(...options);
+  select.value = visibleModels.includes(remembered) ? remembered : (visibleModels[0] || '');
+  if (select.value) localStorage.setItem(MODEL_KEY, select.value);
+  updateModelHealthButton();
+}
+
+function updateModelHealthButton() {
+  const button = $('#model-health-button');
+  if (!button) return;
+  const longLabel = button.querySelector('.model-health-label-long');
+  const shortLabel = button.querySelector('.model-health-label-short');
+  const status = $('#model-health-status');
+  const hiddenCount = state.failedModels.size;
+  if (state.modelHealthRunning) {
+    const { completed, total } = state.modelHealthProgress;
+    longLabel.textContent = `Comprobando ${completed}/${total}`;
+    shortLabel.textContent = `${completed}/${total}`;
+    button.setAttribute('aria-label', `Comprobando modelos: ${completed} de ${total}`);
+    button.setAttribute('aria-busy', 'true');
+    status.textContent = `Comprobando modelo ${completed} de ${total}.`;
+  } else {
+    const showingDiscarded = state.hideFailedModels && hiddenCount > 0;
+    longLabel.textContent = showingDiscarded ? `Mostrar caídos (${hiddenCount})` : 'Descartar modelos caídos';
+    shortLabel.textContent = showingDiscarded ? `Mostrar caídos (${hiddenCount})` : 'Descartar caídos';
+    button.setAttribute('aria-label', showingDiscarded ? `Mostrar ${hiddenCount} modelos caídos` : 'Descartar modelos caídos');
+    button.removeAttribute('aria-busy');
+    status.textContent = '';
+  }
+  button.disabled = state.modelHealthRunning || state.modelsLoading || state.generating || !state.token || !state.models.length;
+  const busy = state.modelHealthRunning || state.modelsLoading || state.generating;
+  $('#model-select').disabled = busy || !state.models.length;
+  $('#send-button').disabled = busy || !selectedModel();
+  $('#message-input').disabled = state.modelHealthRunning || state.generating;
+}
+
+async function discardDownModels() {
+  if (state.modelHealthRunning || state.modelsLoading || state.generating || !state.token || !state.models.length) return;
+  if (state.hideFailedModels && state.failedModels.size) {
+    state.hideFailedModels = false;
+    populateModels();
+    toast('Se muestran todos los modelos; los que fallaron siguen marcados.');
+    return;
+  }
+
+  const token = state.token;
+  const controller = new AbortController();
+  state.modelHealthRunning = true;
+  state.modelHealthController = controller;
+  state.modelHealthProgress = { completed: 0, total: state.models.length };
+  updateModelHealthButton();
+  try {
+    const configResponse = await fetch('/chat/api/config', { headers: { authorization: `Bearer ${token}` }, signal: controller.signal });
+    if (state.token !== token) return;
+    if (configResponse.status === 401) {
+      showAccess('El token no es válido o ha sido revocado.');
+      return;
+    }
+    if (!configResponse.ok) throw new Error(`No se pudo verificar el acceso (HTTP ${configResponse.status}).`);
+    const config = await configResponse.json();
+    if (state.token !== token || state.modelHealthController !== controller) return;
+    if (config.paused) {
+      toast('La clave está pausada; no se comprobaron modelos.');
+      return;
+    }
+    if (!window.BenziaModelHealth?.probeModels) throw new Error('No se pudo cargar la comprobación de modelos.');
+
+    const results = await window.BenziaModelHealth.probeModels({
+      models: [...state.models], endpoint: state.endpoint, token,
+      signal: controller.signal,
+      onProgress: ({ completed, total }) => {
+        state.modelHealthProgress = { completed, total };
+        updateModelHealthButton();
+      }
+    });
+    if (state.token !== token || state.modelHealthController !== controller) return;
+
+    // Recheck the local key state after the probe; paused keys return a synthetic 200 response.
+    const finalGateResponse = await fetch('/chat/api/config', { headers: { authorization: `Bearer ${token}` }, signal: controller.signal });
+    if (state.token !== token || state.modelHealthController !== controller) return;
+    if (finalGateResponse.status === 401) {
+      showAccess('El token no es válido o ha sido revocado.');
+      return;
+    }
+    if (!finalGateResponse.ok) throw new Error(`No se pudo volver a verificar el acceso (HTTP ${finalGateResponse.status}).`);
+    const finalGate = await finalGateResponse.json();
+    if (state.token !== token || state.modelHealthController !== controller) return;
+    if (finalGate.paused) {
+      toast('La clave se pausó durante la comprobación; no se descartó ningún modelo.');
+      return;
+    }
+
+    state.failedModels = new Set(results.filter((result) => result.status === 'down').map((result) => result.model));
+    state.unknownModels = new Set(results.filter((result) => result.status === 'unknown').map((result) => result.model));
+    state.hideFailedModels = state.failedModels.size > 0;
+    populateModels();
+    const online = results.filter((result) => result.status === 'online').length;
+    const unknown = state.unknownModels.size;
+    const failed = state.failedModels.size;
+    const summary = `${failed} caídos ocultados; ${online} responden${unknown ? `; ${unknown} por revisar` : ''}.`;
+    $('#model-health-status').textContent = summary;
+    toast(summary);
+  } catch (error) {
+    if (state.token === token && state.modelHealthController === controller) {
+      toast(error?.name === 'AbortError' ? 'Comprobación cancelada.' : error.message || 'No se pudo comprobar los modelos.');
+    }
+  } finally {
+    if (state.modelHealthController === controller) {
+      state.modelHealthController = null;
+      state.modelHealthRunning = false;
+      state.modelHealthProgress = { completed: 0, total: 0 };
+      updateModelHealthButton();
+    }
+  }
 }
 
 function setModelLoading(loading) {
@@ -1071,14 +1207,24 @@ function setModelLoading(loading) {
   $('#model-select').disabled = loading || state.generating;
   $('#send-button').disabled = loading || state.generating;
   $('#message-input').placeholder = loading ? 'Conectando modelos…' : 'Escribe un mensaje…';
+  updateModelHealthButton();
 }
 
 function showAccess(message = '') {
   state.controller?.abort();
+  state.modelHealthController?.abort();
+  state.modelHealthController = null;
+  state.modelHealthRunning = false;
+  state.modelHealthProgress = { completed: 0, total: 0 };
+  state.failedModels.clear();
+  state.unknownModels.clear();
+  state.hideFailedModels = false;
   state.token = '';
   state.endpoint = '';
   state.identity = null;
   state.models = [];
+  $('#model-select').replaceChildren();
+  $('#model-health-status').textContent = '';
   state.modelsLoading = false;
   state.webSearchAvailable = false;
   state.webSearchEnabled = false;
@@ -1093,6 +1239,7 @@ function showAccess(message = '') {
   $('#access-token').value = '';
   renderWebSearchControl();
   renderInstructionsControl();
+  updateModelHealthButton();
   $('#access-token').focus();
 }
 
@@ -1146,6 +1293,7 @@ function setGenerating(generating, abortable = true) {
   $('#send-button').classList.toggle('hidden', generating);
   $('#stop-button').classList.toggle('hidden', !generating || !abortable);
   $('#model-select').disabled = generating || state.modelsLoading;
+  updateModelHealthButton();
 }
 
 function renderWebSearchControl() {
@@ -1417,7 +1565,7 @@ async function requestCompletion(conversation, webContext = '', useExistingPendi
 }
 
 async function sendMessage(text) {
-  if ((!text.trim() && !state.pendingAttachments.length) || state.generating) return;
+  if ((!text.trim() && !state.pendingAttachments.length) || state.generating || state.modelHealthRunning || state.modelsLoading) return;
   const model = selectedModel();
   if (!model) return toast('Selecciona un modelo');
   const conversation = activeConversation() || createConversation();
@@ -1559,6 +1707,7 @@ document.addEventListener('click', (event) => {
 $('#attachment-input').addEventListener('change', (event) => addFiles(event.currentTarget.files));
 $('#mobile-rail').addEventListener('click', () => document.body.classList.add('rail-open'));
 $('#rail-close').addEventListener('click', closeRail);
+$('#model-health-button').addEventListener('click', discardDownModels);
 $('#model-select').addEventListener('change', (event) => {
   localStorage.setItem(MODEL_KEY, event.currentTarget.value);
   const conversation = activeConversation();

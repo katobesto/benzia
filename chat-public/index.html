@@ -6,7 +6,7 @@
   <meta name="color-scheme" content="dark">
   <meta name="description" content="Chat privado para probar los modelos servidos por benzIA.">
   <title>benzIA Chat</title>
-  <link rel="stylesheet" href="/chat/chat.css?v=6">
+  <link rel="stylesheet" href="/chat/chat.css?v=7">
 </head>
 <body>
   <div class="chat-shell" id="chat-shell" aria-hidden="true">
@@ -28,6 +28,11 @@
           <div class="model-control">
             <label for="model-select">Modelo</label>
             <select id="model-select" aria-label="Modelo activo"></select>
+            <button class="model-health-button" id="model-health-button" type="button" aria-label="Descartar modelos caídos" title="Prueba cada modelo con una petición mínima (máximo 1 token). Puede consumir cuota del proveedor.">
+              <span class="model-health-label-long">Descartar modelos caídos</span>
+              <span class="model-health-label-short">Descartar caídos</span>
+            </button>
+            <span class="visually-hidden" id="model-health-status" role="status" aria-live="polite"></span>
           </div>
           <div class="instructions-control">
             <button class="instructions-button" id="instructions-button" type="button" aria-pressed="false" title="Define instrucciones de sistema que se añaden a cada petición de esta conversación."><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5h16M4 12h10M4 18.5h13"/></svg><span class="instructions-label" id="instructions-label">Instrucciones</span></button>
@@ -114,6 +119,7 @@
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
   <script src="/chat/vendor/purify.min.js?v=2" defer></script>
   <script src="/chat/vendor/marked.umd.js?v=2" defer></script>
-  <script src="/chat/chat.js?v=5" defer></script>
+  <script src="/chat/model-health.js?v=1" defer></script>
+  <script src="/chat/chat.js?v=6" defer></script>
 </body>
 </html>

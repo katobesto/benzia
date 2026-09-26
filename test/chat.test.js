@@ -38,6 +38,11 @@ test('sirve la interfaz de chat sin exponer su configuración', async (t) => {
   assert.match(chatSource, /localStorage\.setItem\(TOKEN_KEY, token\)/);
   assert.doesNotMatch(chatSource, /sessionStorage\.setItem\(TOKEN_KEY, token\)/);
 
+  const modelHealth = await fetch(`${baseUrl}/model-health.js`);
+  assert.equal(modelHealth.status, 200);
+  assert.match(modelHealth.headers.get('content-type'), /javascript/);
+  assert.match(await modelHealth.text(), /max_tokens: 1/);
+
   const marked = await fetch(`${baseUrl}/vendor/marked.umd.js`);
   assert.equal(marked.status, 200);
   assert.match(await marked.text(), /marked v18/);
@@ -65,7 +70,8 @@ test('sirve la interfaz de chat sin exponer su configuración', async (t) => {
   assert.deepEqual(await paused.json(), {
     endpoint: 'https://gateway.example.test/v1',
     identity: { id: 'key-2', name: 'Equipo pausado' },
-    webSearchAvailable: false
+    webSearchAvailable: false,
+    paused: true
   });
 
   const allowed = await fetch(`${baseUrl}/api/config`, { headers: { authorization: 'Bearer valid-user-token' } });
@@ -73,7 +79,8 @@ test('sirve la interfaz de chat sin exponer su configuración', async (t) => {
   assert.deepEqual(await allowed.json(), {
     endpoint: 'https://gateway.example.test/v1',
     identity: { id: 'key-1', name: 'Equipo QA' },
-    webSearchAvailable: false
+    webSearchAvailable: false,
+    paused: false
   });
 
   const unavailableSearch = await fetch(`${baseUrl}/api/web-search`, {
