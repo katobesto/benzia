@@ -75,17 +75,17 @@ Declarar `input: ["text"]` en un modelo que no ve es intencionado: avisa a los c
 
 ## Chat web para usuarios
 
-`/chat` ofrece una interfaz de conversación para probar los modelos cargados en Proveedor IA Local. Cada usuario debe introducir una clave activa creada en **Claves API**. La pantalla valida esa clave antes de consultar `/v1/models` y cada respuesta se solicita a `/v1/responses` usando el endpoint público configurado en el dashboard.
+`/chat` ofrece una interfaz de conversación para probar los modelos cargados en Proveedor IA Local y en proveedores externos autorizados. Cada usuario debe introducir una clave activa creada en **Claves API**. La pantalla valida esa clave antes de consultar `/v1/models` y solicita primero cada respuesta a `/v1/responses` usando el endpoint público configurado en el dashboard.
 
 Las conversaciones, el modelo seleccionado y el token de acceso se conservan en `localStorage` del navegador. El token administrativo del dashboard se almacena del mismo modo. Ambos permanecen en ese navegador y origen hasta usar **Cerrar sesión** o **Cambiar token**; no se comparten entre `localhost` y un dominio público distinto. En cada turno se reenvía el historial de la conversación activa para conservar el contexto. El servidor mantiene su política de privacidad: no persiste mensajes ni respuestas, únicamente las métricas de uso ya descritas.
 
-El chat web usa `/v1/responses` con `store: false`: conserva el historial únicamente en el navegador y permite que Proveedor IA Local reporte los tokens reutilizados por su prompt cache. Los clientes externos pueden seguir usando todos los endpoints OpenAI-compatible del gateway.
+El chat web usa `/v1/responses` con `store: false`: conserva el historial únicamente en el navegador y permite que Proveedor IA Local reporte los tokens reutilizados por su prompt cache. Si el proveedor no implementa Responses y devuelve un error de compatibilidad, el chat reintenta automáticamente el turno mediante `/v1/chat/completions`, con el mismo historial, adjuntos y streaming. Los clientes externos pueden seguir usando todos los endpoints OpenAI-compatible del gateway.
 
 Las respuestas se interpretan como Markdown con `marked` (GFM) y se sanean con `DOMPurify` antes de mostrarse. Se admiten encabezados, listas, enlaces, citas, tablas, tareas, código en línea y bloques de código copiables sin confiar en el HTML devuelto por el modelo.
 
 El compositor permite adjuntar hasta cuatro archivos mediante el selector, arrastrando o pegando imágenes. JPEG, PNG, WebP y GIF se optimizan localmente y se envían a Proveedor IA Local como contenido visual compatible con OpenAI; para interpretarlas, el modelo seleccionado debe ser multimodal o de visión. PDF, DOCX, TXT, Markdown, CSV y JSON se procesan temporalmente en memoria, se convierten a texto y se incorporan al contexto con su nombre. Los documentos admiten hasta 6 MB y 120.000 caracteres extraídos; nunca se escriben en disco. Las imágenes y el texto extraído forman parte del historial local del navegador para conservar el contexto de la conversación.
 
-La extracción usa el endpoint protegido `POST /chat/api/attachments/extract`, por lo que también exige una clave de usuario activa. El navegador reduce cada imagen a un máximo de 1,3 MB antes de almacenarla y enviarla. Si `localStorage` se llena, la interfaz avisa para que se eliminen chats antiguos.
+La extracción usa el endpoint protegido `POST /chat/api/attachments/extract`, por lo que también exige una clave de usuario activa. El navegador reduce cada imagen a un máximo de 1,3 MB antes de almacenarla y enviarla. Los documentos se delimitan y se marcan como contenido no confiable antes de enviarlos al modelo: sirven como referencia, pero sus instrucciones o enlaces no alteran las indicaciones del usuario. Si `localStorage` se llena, la interfaz avisa para que se eliminen chats antiguos.
 
 ### Contexto web con Brave Search
 

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { normalizeResearchMessages, parseResearchPlan } from '../src/research.js';
+import { canPlanWithExternalProvider, normalizeResearchMessages, parseResearchPlan } from '../src/research.js';
 
 test('conserva una ventana amplia de conversación para planificar búsquedas', () => {
   const messages = normalizeResearchMessages([
@@ -32,4 +32,12 @@ test('usa una consulta contextual de respaldo cuando el planificador no devuelve
   const plan = parseResearchPlan('No se pudo generar JSON', messages);
   assert.match(plan.queries[0], /Mac Studio/);
   assert.match(plan.queries[0], /últimos modelos/);
+});
+
+test('el planificador respeta el filtro de proveedores externos de la clave', () => {
+  const route = { provider: { id: 'cloud' }, upstreamModel: 'modelo' };
+  assert.equal(canPlanWithExternalProvider(route, { allowExternalProviders: false }), false);
+  assert.equal(canPlanWithExternalProvider(route, { allowExternalProviders: true, externalProviderIds: ['other'] }), false);
+  assert.equal(canPlanWithExternalProvider(route, { allowExternalProviders: true, externalProviderIds: ['cloud'] }), true);
+  assert.equal(canPlanWithExternalProvider(route, { allowExternalProviders: true, externalProviderIds: null }), true);
 });

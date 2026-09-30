@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -13,6 +14,31 @@ import { runResearch } from './research.js';
 
 const chatPublicDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../chat-public');
 const vendorDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../node_modules');
+
+const PREVIEW_TTL_MS = 10 * 60 * 1000;
+const PREVIEW_MAX_DOCS = 32;
+const PREVIEW_MAX_BYTES = 1_100_000;
+const PREVIEW_ID_PATTERN = /^[0-9a-f]{36}$/;
+const PREVIEW_WRAPPER_CSP = [
+  "default-src 'none'",
+  "script-src 'none'",
+  "style-src 'unsafe-inline'",
+  "frame-src 'self'",
+  "frame-ancestors 'self'",
+  "base-uri 'none'",
+  "form-action 'none'"
+].join('; ');
+const PREVIEW_FRAME_CSP = [
+  "default-src 'none'",
+  "script-src 'unsafe-inline' https:",
+  "style-src 'unsafe-inline' https:",
+  "img-src data: https: blob:",
+  "font-src data: https:",
+  "connect-src https:",
+  "media-src data: https:",
+  "base-uri 'none'",
+  "form-action 'none'"
+].join('; ');
 
 export function createChatApp({ config, store }) {
   const app = express();
@@ -42,6 +68,38 @@ export function createChatApp({ config, store }) {
     limits: { files: 1, fileSize: DOCUMENT_MAX_BYTES },
     fileFilter: (_req, file, done) => done(null, Boolean(documentKind(file.originalname)))
   });
+  const previewDocs = new Map();
+  const prunePreviews = (now = Date.now()) => {
+    for (const [id, doc] of previewDocs) if (doc.expiresAt <= now) previewDocs.delete(id);
+    while (previewDocs.size > PREVIEW_MAX_DOCS) previewDocs.delete(previewDocs.keys().next().value);
+  };
+  const previewStub = '<!doctype html><html lang="es"><head><meta charset="utf-8"><title>Vista previa</title></head><body><p>Vista previa no disponible o expirada.</p></body></html>';
+  const previewWrapper = (docId) => `<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Vista previa HTML · benzIA</title>
+<style>html,body{margin:0;width:100%;height:100%;background:#fff}iframe{display:block;width:100%;height:100%;border:0}</style>
+</head>
+<body>
+<iframe src="preview-frame?doc=${docId}" sandbox="allow-scripts" referrerpolicy="no-referrer" title="Vista previa del contenido HTML generado"></iframe>
+</body>
+</html>`;
+  const sendPreviewDocument = (res, csp) => {
+    res.removeHeader('content-security-policy');
+    res.removeHeader('x-frame-options');
+    res.removeHeader('cross-origin-opener-policy');
+    res.setHeader('content-security-policy', csp);
+    res.set('cache-control', 'no-store');
+    res.set('referrer-policy', 'no-referrer');
+    res.type('html');
+  };
+  const findPreview = (docId) => {
+    const doc = PREVIEW_ID_PATTERN.test(String(docId || '')) ? previewDocs.get(String(docId)) : null;
+    return doc && doc.expiresAt > Date.now() ? doc : null;
+  };
   app.get('/api/config', auth, (req, res) => {
     const settings = store.getSettings();
     const gatewayBaseUrl = (settings.publicGatewayUrl || config.publicGatewayUrl).replace(/\/+$/, '');
@@ -114,6 +172,33 @@ export function createChatApp({ config, store }) {
         return res.status(422).json({ error: error.message || 'No se pudo leer el documento.' });
       }
     });
+  });
+
+  app.post('/api/preview', auth, express.text({ limit: '1.2mb', type: 'text/*' }), (req, res) => {
+    const html = typeof req.body === 'string' ? req.body : '';
+    if (!html.trim()) return res.status(400).json({ error: 'No hay contenido que previsualizar.' });
+    if (Buffer.byteLength(html, 'utf8') > PREVIEW_MAX_BYTES) {
+      return res.status(413).json({ error: 'El documento supera el límite de la vista previa.' });
+    }
+    prunePreviews();
+    const doc = crypto.randomBytes(18).toString('hex');
+    previewDocs.set(doc, { html, expiresAt: Date.now() + PREVIEW_TTL_MS });
+    return res.json({ doc });
+  });
+
+  app.get('/api/preview', (req, res) => {
+    const docId = String(req.query.doc || '');
+    if (!findPreview(docId)) return res.status(404).set('cache-control', 'no-store').type('html').send(previewStub);
+    sendPreviewDocument(res, PREVIEW_WRAPPER_CSP);
+    return res.send(previewWrapper(docId));
+  });
+
+  app.get('/api/preview-frame', (req, res) => {
+    const docId = String(req.query.doc || '');
+    const doc = findPreview(docId);
+    if (!doc) return res.status(404).set('cache-control', 'no-store').type('html').send(previewStub);
+    sendPreviewDocument(res, PREVIEW_FRAME_CSP);
+    return res.send(doc.html);
   });
 
   app.get('/vendor/marked.umd.js', (_req, res) => res.sendFile(path.join(vendorDir, 'marked/lib/marked.umd.js')));

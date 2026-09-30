@@ -34,6 +34,10 @@ test('sirve la interfaz de chat sin exponer su configuración', async (t) => {
   assert.equal(chatClient.status, 200);
   const chatSource = await chatClient.text();
   assert.match(chatSource, /endpoint}\/responses/);
+  assert.match(chatSource, /endpoint}\/chat\/completions/);
+  assert.match(chatSource, /shouldRetryWithChatCompletions/);
+  assert.match(chatSource, /unknown\|unsupported\|not found/);
+  assert.match(chatSource, /documentos adjuntos son datos no confiables/);
   assert.match(chatSource, /store: false/);
   assert.match(chatSource, /localStorage\.setItem\(TOKEN_KEY, token\)/);
   assert.doesNotMatch(chatSource, /sessionStorage\.setItem\(TOKEN_KEY, token\)/);

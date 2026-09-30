@@ -295,16 +295,31 @@ export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, 
 
     let upstream;
     try {
-      upstream = await fetch(upstreamUrl, {
+      const requestUpstream = (requestBody) => fetch(upstreamUrl, {
         method: req.method,
         headers: {
           accept: req.get('accept') || '*/*',
-          ...(upstreamBody ? { 'content-type': 'application/json' } : {}),
-          ...(selectedProvider.apiKey ? { authorization: `Bearer ${selectedProvider.apiKey}` } : {})
+          ...(requestBody ? { 'content-type': 'application/json' } : {}),
+          ...(selectedProvider.apiKey ? { authorization: `Bearer ${selectedProvider.apiKey}` } : {}),
+          // Algunos servidores OpenAI-compatibles responden 404 a /responses
+          // sin leer el cuerpo. El cliente reintenta entonces con
+          // /chat/completions; cerrar este socket evita que ese JSON pendiente
+          // sea interpretado por el upstream como el método del siguiente POST.
+          ...(externalRoute && path === '/v1/responses' ? { connection: 'close' } : {})
         },
-        body: upstreamBody ? JSON.stringify(upstreamBody) : undefined,
+        body: requestBody ? JSON.stringify(requestBody) : undefined,
         signal: controller.signal
       });
+      upstream = await requestUpstream(upstreamBody);
+      // `stream_options.include_usage` es OpenAI-compatible, pero no todos los
+      // servidores que implementan chat/completions lo reconocen todavía.
+      // Reintentar sin esa extensión conserva la compatibilidad; en ese caso
+      // benzIA estima el uso si el upstream no lo publica de otra forma.
+      if (upstream.status === 400 && path === '/v1/chat/completions' && upstreamBody?.stream_options?.include_usage) {
+        const compatibleBody = structuredClone(upstreamBody);
+        delete compatibleBody.stream_options;
+        upstream = await requestUpstream(compatibleBody);
+      }
     } catch (error) {
       cleanupRequest();
       if (trackLive) liveActivity?.finish(requestId);

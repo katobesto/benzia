@@ -250,6 +250,7 @@ test('agrega modelos externos sólo para claves autorizadas y enruta el modelo p
 
   let externalAuthorization = '';
   let externalBody;
+  let externalResponsesConnection = '';
   const external = express();
   external.use(express.json());
   external.get('/v1/models', (req, res) => {
@@ -260,6 +261,10 @@ test('agrega modelos externos sólo para claves autorizadas y enruta el modelo p
     externalAuthorization = req.get('authorization') || '';
     externalBody = req.body;
     res.json({ choices: [{ message: { content: 'Desde cloud' } }], usage: { prompt_tokens: 2, completion_tokens: 2 } });
+  });
+  external.post('/v1/responses', (req, res) => {
+    externalResponsesConnection = req.get('connection') || '';
+    res.status(404).json({ error: { message: 'unknown path /v1/responses' } });
   });
   const externalServer = external.listen(0, '127.0.0.1');
   await new Promise((resolve) => externalServer.once('listening', resolve));
@@ -306,6 +311,13 @@ test('agrega modelos externos sólo para claves autorizadas y enruta el modelo p
   assert.equal(externalAuthorization, 'Bearer cloud-secret');
   assert.equal(metrics[0].model, 'cloud/org/modelo-cloud');
   assert.equal(metrics[0].provider, 'cloud');
+
+  const unsupportedResponses = await fetch(`${baseUrl}/responses`, {
+    method: 'POST', headers: { authorization: 'Bearer external-key', 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'cloud/org/modelo-cloud', input: [] })
+  });
+  assert.equal(unsupportedResponses.status, 404);
+  assert.equal(externalResponsesConnection, 'close');
 });
 
 test('el filtro de proveedores visibles por clave limita modelos y enrutado sin consultar lo no marcado', async (t) => {
@@ -454,6 +466,45 @@ test('registra la telemetría final del proveedor en streaming', async (t) => {
   assert.equal(metrics[0].lmCachedInputTokens, 8);
   assert.equal(metrics[0].tokensPerSecond, 42);
   assert.equal(metrics[0].throughputSource, 'upstream');
+});
+
+test('reintenta chat completions sin stream_options si el proveedor no la admite', async (t) => {
+  const receivedBodies = [];
+  const upstream = express();
+  upstream.use(express.json());
+  upstream.post('/v1/chat/completions', (req, res) => {
+    receivedBodies.push(req.body);
+    if (req.body.stream_options) return res.status(400).json({ error: { message: 'stream_options no admitido' } });
+    res.type('text/event-stream');
+    res.end('data: {"choices":[{"delta":{"content":"Compatible"}}]}\n\ndata: [DONE]\n\n');
+  });
+  const upstreamServer = upstream.listen(0, '127.0.0.1');
+  await new Promise((resolve) => upstreamServer.once('listening', resolve));
+  t.after(() => new Promise((resolve) => upstreamServer.close(resolve)));
+
+  const store = {
+    getSettings: () => ({}),
+    findKeyByToken: () => ({ id: 'key-1', name: 'Compatible' }),
+    recordMetric: async () => {}
+  };
+  const gateway = createGatewayApp({
+    config: { upstreamBaseUrl: `http://127.0.0.1:${upstreamServer.address().port}`, upstreamApiKey: '', requestTimeoutMs: 5000 },
+    store
+  });
+  const gatewayServer = gateway.listen(0, '127.0.0.1');
+  await new Promise((resolve) => gatewayServer.once('listening', resolve));
+  t.after(() => new Promise((resolve) => gatewayServer.close(resolve)));
+
+  const response = await fetch(`http://127.0.0.1:${gatewayServer.address().port}/v1/chat/completions`, {
+    method: 'POST',
+    headers: { authorization: 'Bearer valid-key', 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'modelo', stream: true, messages: [{ role: 'user', content: 'Hola' }] })
+  });
+  assert.equal(response.status, 200);
+  assert.match(await response.text(), /Compatible/);
+  assert.equal(receivedBodies.length, 2);
+  assert.equal(receivedBodies[0].stream_options.include_usage, true);
+  assert.equal(receivedBodies[1].stream_options, undefined);
 });
 
 test('mantiene el timeout durante todo el stream y registra la interrupción', async (t) => {

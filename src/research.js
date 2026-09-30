@@ -52,6 +52,12 @@ function plannerPrompt(messages) {
   return `Decide primero si una búsqueda web aportará valor real para responder al último mensaje del usuario dentro de esta conversación. Devuelve EXCLUSIVAMENTE JSON válido, sin Markdown: {"topic":"tema concreto","should_search":true,"queries":["consulta autónoma 1","consulta autónoma 2"]}. Usa should_search:false y queries:[] si la respuesta es conversacional, creativa, de razonamiento, o puede responderse con el contexto disponible sin información actual, verificable o con fuentes. Usa should_search:true si el usuario pide buscar, fuentes, enlaces, información reciente, precisión factual, recomendaciones actuales o datos verificables. Si buscas, incluye entre 1 y 3 consultas. Cada consulta debe poder entenderse por sí sola, conservar el sujeto implícito de la conversación, usar términos específicos y priorizar fuentes primarias cuando corresponda. No respondas al usuario ni reveles razonamiento.\n\nCONVERSACIÓN:\n${transcript}`;
 }
 
+export function canPlanWithExternalProvider(externalRoute, accessKey = {}) {
+  if (!externalRoute) return true;
+  if (!accessKey.allowExternalProviders) return false;
+  return accessKey.externalProviderIds == null || accessKey.externalProviderIds.includes(externalRoute.provider.id);
+}
+
 async function planWithModel({ config, settings, model, messages, accessKey, store }) {
   const startedAt = Date.now();
   const body = {
@@ -64,8 +70,8 @@ async function planWithModel({ config, settings, model, messages, accessKey, sto
     ]
   };
   const externalRoute = routeForModel(model, settings.externalProviders);
-  const provider = externalRoute && accessKey.allowExternalProviders ? externalRoute.provider : null;
-  if (externalRoute && !provider) return fallbackPlan(messages);
+  if (!canPlanWithExternalProvider(externalRoute, accessKey)) return fallbackPlan(messages);
+  const provider = externalRoute?.provider || null;
   if (provider) body.model = externalRoute.upstreamModel;
   try {
     const response = await fetch(`${provider?.baseUrl || settings.upstreamBaseUrl}/v1/chat/completions`, {
