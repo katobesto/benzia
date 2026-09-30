@@ -1568,24 +1568,42 @@ async function requestCompletion(conversation, webContext = '', useExistingPendi
   let thinking = assistantMessage.thinking || '';
   let usage = null;
   try {
-    let response = await fetch(`${state.endpoint}/responses`, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${state.token}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ model: conversation.model, input: context, stream: true, store: false, ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}) }),
-      signal: state.controller.signal
-    });
-    let protocol = 'responses';
-    if (!response.ok && await shouldRetryWithChatCompletions(response)) {
+    const chatCompletionsBody = {
+      model: conversation.model,
+      messages: messagesForChatCompletions(conversation, webContext),
+      stream: true,
+      stream_options: { include_usage: true },
+      ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {})
+    };
+    // El gateway TensorFold de IAMAC no implementa /responses. Su 404 deja
+    // una conexión upstream reutilizable en un estado inconsistente y el
+    // siguiente POST puede llegar como parte del método HTTP; usa directamente
+    // la ruta OpenAI-compatible que el proveedor sí admite.
+    const useChatCompletionsFirst = /^iamac\//i.test(conversation.model);
+    let response;
+    let protocol;
+    if (useChatCompletionsFirst) {
       response = await fetch(`${state.endpoint}/chat/completions`, {
         method: 'POST',
         headers: { authorization: `Bearer ${state.token}`, 'content-type': 'application/json' },
-        body: JSON.stringify({
-          model: conversation.model,
-          messages: messagesForChatCompletions(conversation, webContext),
-          stream: true,
-          stream_options: { include_usage: true },
-          ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {})
-        }),
+        body: JSON.stringify(chatCompletionsBody),
+        signal: state.controller.signal
+      });
+      protocol = 'chat_completions';
+    } else {
+      response = await fetch(`${state.endpoint}/responses`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${state.token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ model: conversation.model, input: context, stream: true, store: false, ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}) }),
+        signal: state.controller.signal
+      });
+      protocol = 'responses';
+    }
+    if (!useChatCompletionsFirst && !response.ok && await shouldRetryWithChatCompletions(response)) {
+      response = await fetch(`${state.endpoint}/chat/completions`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${state.token}`, 'content-type': 'application/json' },
+        body: JSON.stringify(chatCompletionsBody),
         signal: state.controller.signal
       });
       protocol = 'chat_completions';
