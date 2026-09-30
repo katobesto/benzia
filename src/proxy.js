@@ -305,7 +305,7 @@ export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, 
           // sin leer el cuerpo. El cliente reintenta entonces con
           // /chat/completions; cerrar este socket evita que ese JSON pendiente
           // sea interpretado por el upstream como el método del siguiente POST.
-          ...(externalRoute && path === '/v1/responses' ? { connection: 'close' } : {})
+          ...(path === '/v1/responses' ? { connection: 'close' } : {})
         },
         body: requestBody ? JSON.stringify(requestBody) : undefined,
         signal: controller.signal

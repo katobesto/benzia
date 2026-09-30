@@ -243,7 +243,12 @@ test('reenvía sin alterar mensajes multimodales a Proveedor IA Local', async (t
 
 test('agrega modelos externos sólo para claves autorizadas y enruta el modelo prefijado', async (t) => {
   const local = express();
+  let localResponsesConnection = '';
   local.get('/v1/models', (_req, res) => res.json({ object: 'list', data: [{ id: 'modelo-local', object: 'model' }] }));
+  local.post('/v1/responses', (req, res) => {
+    localResponsesConnection = req.get('connection') || '';
+    res.status(404).json({ error: { message: 'unknown path /v1/responses' } });
+  });
   const localServer = local.listen(0, '127.0.0.1');
   await new Promise((resolve) => localServer.once('listening', resolve));
   t.after(() => new Promise((resolve) => localServer.close(resolve)));
@@ -318,6 +323,13 @@ test('agrega modelos externos sólo para claves autorizadas y enruta el modelo p
   });
   assert.equal(unsupportedResponses.status, 404);
   assert.equal(externalResponsesConnection, 'close');
+
+  const localUnsupportedResponses = await fetch(`${baseUrl}/responses`, {
+    method: 'POST', headers: { authorization: 'Bearer local-key', 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'modelo-local', input: [] })
+  });
+  assert.equal(localUnsupportedResponses.status, 404);
+  assert.equal(localResponsesConnection, 'close');
 });
 
 test('el filtro de proveedores visibles por clave limita modelos y enrutado sin consultar lo no marcado', async (t) => {
