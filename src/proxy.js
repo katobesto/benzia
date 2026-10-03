@@ -199,6 +199,10 @@ export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, 
     }
 
     const path = req.path;
+    if (req.method === 'GET' && path === '/v1/user_stats') {
+      const stats = store.getKeyStats(accessKey.id) || {};
+      return res.json({ object: 'user_stats', ...stats, tokens_consumed: stats.consumedTokens, tokens_available: stats.availableTokens, percentage_used: stats.usagePercent, uncached_input_tokens: stats.uncachedInputTokens, tokens_saved_by_cache: stats.cachedTokens, cache_tokens_saved: stats.cachedTokens, cache_percentage: stats.cachePercent, percentage_cache: stats.cachePercent });
+    }
     const body = req.body && Object.keys(req.body).length ? structuredClone(req.body) : undefined;
     const isStream = Boolean(body?.stream);
     const isInference = req.method === 'POST' && INFERENCE_PATHS.has(path);
@@ -206,7 +210,15 @@ export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, 
     if (accessKey.pausedAt && !path.startsWith('/v1/models')) {
       return res.status(403).json(safeError(403, accessKey.pausedMessage || PAUSED_TOKEN_MESSAGE, 'access_disabled'));
     }
-
+    if (isInference && accessKey.tokenLimit != null) {
+      const remaining = Math.max(0, Number(accessKey.tokenLimit) - Number(accessKey.consumedTokens || 0));
+      if (!remaining) return res.status(429).json(safeError(429, 'Has agotado los tokens disponibles para esta clave.', 'token_limit_exceeded'));
+      const outputBudget = remaining;
+      // Limit generated output to the remaining allowance. The final charge is
+      // still based on upstream usage when available, with estimates as fallback.
+      if (path === '/v1/responses') body.max_output_tokens = Math.min(Number(body.max_output_tokens) || outputBudget, outputBudget);
+      else if (path !== '/v1/embeddings') body.max_tokens = Math.min(Number(body.max_tokens) || outputBudget, outputBudget);
+    }
     const settings = effectiveSettings();
     if (req.method === 'GET' && path === '/v1/models') {
       const localProvider = { baseUrl: settings.upstreamBaseUrl, apiKey: settings.upstreamApiKey };

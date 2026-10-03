@@ -77,7 +77,12 @@ export class SqliteStore {
         revoked_at TEXT,
         last_used_at TEXT,
         allow_external_providers INTEGER NOT NULL DEFAULT 0,
-        external_provider_ids TEXT
+        external_provider_ids TEXT,
+        token_limit INTEGER,
+        consumed_tokens INTEGER NOT NULL DEFAULT 0,
+        cached_tokens INTEGER NOT NULL DEFAULT 0,
+        uncached_input_tokens INTEGER NOT NULL DEFAULT 0,
+        cache_reported_input_tokens INTEGER NOT NULL DEFAULT 0
       );
       CREATE TABLE IF NOT EXISTS metrics (
         id TEXT PRIMARY KEY,
@@ -99,6 +104,25 @@ export class SqliteStore {
     if (!accessKeyColumns.has('paused_message')) this.db.exec('ALTER TABLE access_keys ADD COLUMN paused_message TEXT');
     if (!accessKeyColumns.has('allow_external_providers')) this.db.exec('ALTER TABLE access_keys ADD COLUMN allow_external_providers INTEGER NOT NULL DEFAULT 0');
     if (!accessKeyColumns.has('external_provider_ids')) this.db.exec('ALTER TABLE access_keys ADD COLUMN external_provider_ids TEXT');
+    if (!accessKeyColumns.has('token_limit')) this.db.exec('ALTER TABLE access_keys ADD COLUMN token_limit INTEGER');
+    const hadConsumedTokens = accessKeyColumns.has('consumed_tokens');
+    if (!hadConsumedTokens) {
+      this.db.exec('ALTER TABLE access_keys ADD COLUMN consumed_tokens INTEGER NOT NULL DEFAULT 0');
+      this.db.exec(`UPDATE access_keys SET consumed_tokens = COALESCE((SELECT SUM(MAX(0, input_tokens - COALESCE(json_extract(data_json, '$.lmCachedInputTokens'), 0)) + output_tokens) FROM metrics WHERE metrics.key_id = access_keys.id), 0)`);
+    }
+    if (!accessKeyColumns.has('cached_tokens')) {
+      this.db.exec('ALTER TABLE access_keys ADD COLUMN cached_tokens INTEGER NOT NULL DEFAULT 0');
+      this.db.exec(`UPDATE access_keys SET cached_tokens = COALESCE((SELECT SUM(MIN(input_tokens, MAX(0, COALESCE(json_extract(data_json, '$.lmCachedInputTokens'), 0)))) FROM metrics WHERE metrics.key_id = access_keys.id), 0)`);
+      if (hadConsumedTokens) this.db.exec('UPDATE access_keys SET consumed_tokens = MAX(0, consumed_tokens - cached_tokens)');
+    }
+    if (!accessKeyColumns.has('uncached_input_tokens')) {
+      this.db.exec('ALTER TABLE access_keys ADD COLUMN uncached_input_tokens INTEGER NOT NULL DEFAULT 0');
+      this.db.exec(`UPDATE access_keys SET uncached_input_tokens = COALESCE((SELECT SUM(MAX(0, input_tokens - MIN(input_tokens, MAX(0, COALESCE(json_extract(data_json, '$.lmCachedInputTokens'), 0))))) FROM metrics WHERE metrics.key_id = access_keys.id), 0)`);
+    }
+    if (!accessKeyColumns.has('cache_reported_input_tokens')) {
+      this.db.exec('ALTER TABLE access_keys ADD COLUMN cache_reported_input_tokens INTEGER NOT NULL DEFAULT 0');
+      this.db.exec(`UPDATE access_keys SET cache_reported_input_tokens = COALESCE((SELECT SUM(input_tokens) FROM metrics WHERE metrics.key_id = access_keys.id AND json_type(data_json, '$.lmCachedInputTokens') IN ('integer', 'real')), 0)`);
+    }
     this.prepareStatements();
     await this.migrateLegacyJson();
     this.migrateStoredMetrics();
@@ -112,15 +136,15 @@ export class SqliteStore {
       ON CONFLICT(id) DO UPDATE SET data_json = excluded.data_json
     `);
     this.statements.keysList = this.db.prepare(`
-      SELECT id, name, prefix, created_at AS createdAt, paused_at AS pausedAt, paused_message AS pausedMessage, revoked_at AS revokedAt, last_used_at AS lastUsedAt, allow_external_providers AS allowExternalProviders, external_provider_ids AS externalProviderIds
+      SELECT id, name, prefix, created_at AS createdAt, paused_at AS pausedAt, paused_message AS pausedMessage, revoked_at AS revokedAt, last_used_at AS lastUsedAt, allow_external_providers AS allowExternalProviders, external_provider_ids AS externalProviderIds, token_limit AS tokenLimit, consumed_tokens AS consumedTokens, cached_tokens AS cachedTokens
       FROM access_keys ORDER BY created_at ASC
     `);
     this.statements.keyByHash = this.db.prepare(`
-      SELECT id, name, prefix, created_at AS createdAt, paused_at AS pausedAt, paused_message AS pausedMessage, revoked_at AS revokedAt, last_used_at AS lastUsedAt, allow_external_providers AS allowExternalProviders, external_provider_ids AS externalProviderIds
+      SELECT id, name, prefix, created_at AS createdAt, paused_at AS pausedAt, paused_message AS pausedMessage, revoked_at AS revokedAt, last_used_at AS lastUsedAt, allow_external_providers AS allowExternalProviders, external_provider_ids AS externalProviderIds, token_limit AS tokenLimit, consumed_tokens AS consumedTokens, cached_tokens AS cachedTokens
       FROM access_keys WHERE token_hash = ? AND paused_at IS NULL AND revoked_at IS NULL
     `);
     this.statements.keyByHashAnyState = this.db.prepare(`
-      SELECT id, name, prefix, created_at AS createdAt, paused_at AS pausedAt, paused_message AS pausedMessage, revoked_at AS revokedAt, last_used_at AS lastUsedAt, allow_external_providers AS allowExternalProviders, external_provider_ids AS externalProviderIds
+      SELECT id, name, prefix, created_at AS createdAt, paused_at AS pausedAt, paused_message AS pausedMessage, revoked_at AS revokedAt, last_used_at AS lastUsedAt, allow_external_providers AS allowExternalProviders, external_provider_ids AS externalProviderIds, token_limit AS tokenLimit, consumed_tokens AS consumedTokens, cached_tokens AS cachedTokens
       FROM access_keys WHERE token_hash = ?
     `);
     this.statements.keyInsert = this.db.prepare(`
@@ -130,9 +154,14 @@ export class SqliteStore {
     this.statements.keyPause = this.db.prepare('UPDATE access_keys SET paused_at = COALESCE(paused_at, ?), paused_message = ? WHERE id = ? AND revoked_at IS NULL');
     this.statements.keyResume = this.db.prepare('UPDATE access_keys SET paused_at = NULL WHERE id = ? AND revoked_at IS NULL');
     this.statements.keyRevoke = this.db.prepare('UPDATE access_keys SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL');
+    this.statements.keyDelete = this.db.prepare('DELETE FROM access_keys WHERE id = ?');
+    this.statements.keyTokenLimit = this.db.prepare('UPDATE access_keys SET token_limit = ? WHERE id = ?');
+    this.statements.keyStats = this.db.prepare('SELECT token_limit AS tokenLimit, consumed_tokens AS consumedTokens, cached_tokens AS cachedTokens, uncached_input_tokens AS uncachedInputTokens, cache_reported_input_tokens AS cacheReportedInputTokens FROM access_keys WHERE id = ?');
     this.statements.keyRename = this.db.prepare('UPDATE access_keys SET name = ? WHERE id = ?');
     this.statements.keyExternalAccess = this.db.prepare('UPDATE access_keys SET allow_external_providers = ?, external_provider_ids = ? WHERE id = ? AND revoked_at IS NULL');
     this.statements.keyTouch = this.db.prepare('UPDATE access_keys SET last_used_at = ? WHERE id = ?');
+    this.statements.keyConsume = this.db.prepare('UPDATE access_keys SET consumed_tokens = consumed_tokens + ? WHERE id = ?');
+    this.statements.keyTrackCache = this.db.prepare('UPDATE access_keys SET cached_tokens = cached_tokens + ?, uncached_input_tokens = uncached_input_tokens + ?, cache_reported_input_tokens = cache_reported_input_tokens + ? WHERE id = ?');
     this.statements.metricInsert = this.db.prepare(`
       INSERT INTO metrics (id, at, key_id, status, cache_status, input_tokens, output_tokens, latency_ms, data_json)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -166,7 +195,9 @@ export class SqliteStore {
         );
       }
       for (const rawMetric of Array.isArray(parsed.metrics) ? parsed.metrics : []) {
-        this.insertMetric(normalizeMetric(rawMetric));
+        const metric = normalizeMetric(rawMetric);
+        this.insertMetric(metric);
+        this.trackMetricTokens(metric);
       }
       this.db.exec('COMMIT');
     } catch (error) {
@@ -295,6 +326,25 @@ export class SqliteStore {
     return Number(this.statements.keyRevoke.run(new Date().toISOString(), id).changes) > 0;
   }
 
+  async deleteKey(id) { return Number(this.statements.keyDelete.run(id).changes) > 0; }
+
+  async setKeyTokenLimit(id, tokenLimit) {
+    const result = this.statements.keyTokenLimit.run(tokenLimit, id);
+    return Number(result.changes) ? this.listKeys().find((key) => key.id === id) || null : null;
+  }
+
+  getKeyStats(id) {
+    const row = this.statements.keyStats.get(id);
+    if (!row) return null;
+    const consumedTokens = Number(row.consumedTokens) || 0;
+    const tokenLimit = row.tokenLimit == null ? null : Number(row.tokenLimit);
+    const cachedTokens = Number(row.cachedTokens) || 0;
+    const uncachedInputTokens = Number(row.uncachedInputTokens) || 0;
+    const cacheReportedInputTokens = Number(row.cacheReportedInputTokens) || 0;
+    const cachePercent = cacheReportedInputTokens ? Math.min(100, cachedTokens / cacheReportedInputTokens * 100) : null;
+    return { totalTokens: consumedTokens + cachedTokens, consumedTokens, availableTokens: tokenLimit == null ? null : Math.max(0, tokenLimit - consumedTokens), tokenLimit, usagePercent: tokenLimit == null ? null : Math.min(100, tokenLimit ? consumedTokens / tokenLimit * 100 : 100), uncachedInputTokens, outputTokens: Math.max(0, consumedTokens - uncachedInputTokens), cachedTokens, cachePercent };
+  }
+
   async renameKey(id, name) {
     const result = this.statements.keyRename.run(name, id);
     if (Number(result.changes) === 0) return null;
@@ -321,11 +371,23 @@ export class SqliteStore {
     try {
       this.insertMetric(metric);
       this.statements.keyTouch.run(metric.at, metric.keyId);
+      this.trackMetricTokens(metric);
       this.db.exec('COMMIT');
     } catch (error) {
       this.db.exec('ROLLBACK');
       throw error;
     }
+  }
+
+  trackMetricTokens(metric) {
+    const inputTokens = Math.max(0, Number(metric.inputTokens) || 0);
+    const cachedInputTokens = Number.isFinite(metric.lmCachedInputTokens)
+      ? Math.min(inputTokens, Math.max(0, Number(metric.lmCachedInputTokens)))
+      : 0;
+    const uncachedInputTokens = inputTokens - cachedInputTokens;
+    const outputTokens = Math.max(0, Number(metric.outputTokens) || 0);
+    this.statements.keyConsume.run(uncachedInputTokens + outputTokens, metric.keyId);
+    this.statements.keyTrackCache.run(cachedInputTokens, uncachedInputTokens, Number.isFinite(metric.lmCachedInputTokens) ? inputTokens : 0, metric.keyId);
   }
 
   getMetrics({ from, to, keyId, model, limit = 5000 } = {}) {

@@ -162,6 +162,12 @@ export function createAdminApp({ config, store, liveActivity }) {
 
   app.get('/admin/api/keys', auth, (_req, res) => res.json({ keys: store.listKeys() }));
 
+  app.get('/admin/api/keys/:id/stats', auth, (req, res) => {
+    const stats = store.getKeyStats(req.params.id);
+    if (!stats) return res.status(404).json({ error: 'Clave no encontrada.' });
+    res.json({ stats });
+  });
+
   app.post('/admin/api/keys', auth, async (req, res) => {
     if (!validName(req.body?.name)) return res.status(400).json({ error: 'El nombre debe contener entre 2 y 80 caracteres.' });
     if ('allowExternalProviders' in req.body && typeof req.body.allowExternalProviders !== 'boolean') return res.status(400).json({ error: 'El acceso a proveedores externos debe ser verdadero o falso.' });
@@ -212,9 +218,23 @@ export function createAdminApp({ config, store, liveActivity }) {
     res.json({ key });
   });
 
+  app.patch('/admin/api/keys/:id/limit', auth, async (req, res) => {
+    const value = req.body?.tokenLimit;
+    if (!('tokenLimit' in (req.body || {})) || (value !== null && (!Number.isSafeInteger(value) || value < 1 || value > 1000000000000))) return res.status(400).json({ error: 'El límite debe ser un entero positivo o null para quitarlo.' });
+    const key = await store.setKeyTokenLimit(req.params.id, value);
+    if (!key) return res.status(404).json({ error: 'Clave no encontrada.' });
+    res.json({ key });
+  });
+
   app.delete('/admin/api/keys/:id', auth, async (req, res) => {
     const revoked = await store.revokeKey(req.params.id);
     if (!revoked) return res.status(404).json({ error: 'Clave no encontrada.' });
+    res.status(204).end();
+  });
+
+  app.delete('/admin/api/keys/:id/permanent', auth, async (req, res) => {
+    const deleted = await store.deleteKey(req.params.id);
+    if (!deleted) return res.status(404).json({ error: 'Clave no encontrada.' });
     res.status(204).end();
   });
 

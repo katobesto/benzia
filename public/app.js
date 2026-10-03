@@ -333,7 +333,7 @@ function renderKeys() {
   $('#active-key-count').textContent = exactNumber.format(state.keys.filter((key) => !key.revokedAt && !key.pausedAt).length);
   $('#paused-key-count').textContent = exactNumber.format(state.keys.filter((key) => !key.revokedAt && key.pausedAt).length);
   const table = $('#keys-table');
-  if (!state.keys.length) { table.innerHTML = '<tr><td colspan="7" class="empty-cell">No hay claves. Usa “Crear nueva clave” para añadir la primera.</td></tr>'; return; }
+  if (!state.keys.length) { table.innerHTML = '<tr><td colspan="8" class="empty-cell">No hay claves. Usa “Crear nueva clave” para añadir la primera.</td></tr>'; return; }
   table.innerHTML = [...state.keys].reverse().map((key) => {
     const stateLabel = key.revokedAt ? 'Revocada' : key.pausedAt ? 'Pausada' : 'Activa';
     const stateClass = key.revokedAt ? 'revoked' : key.pausedAt ? 'paused' : '';
@@ -344,13 +344,18 @@ function renderKeys() {
     const providerFilterButton = key.allowExternalProviders
       ? `<button class="row-action provider-filter" data-id="${escapeHtml(key.id)}" title="Elegir qué proveedores externos ve esta clave" type="button">Proveedores</button>`
       : '';
-    const actions = key.revokedAt ? '' : `<div class="row-actions">${providerFilterButton}${accessAction}<button class="row-action revoke-key" data-id="${escapeHtml(key.id)}" data-name="${escapeHtml(key.name)}" type="button">Revocar</button></div>`;
-    return `<tr><td><strong>${escapeHtml(key.name)}</strong></td><td><code>${escapeHtml(key.prefix)}••••</code></td><td>${dateTime.format(new Date(key.createdAt))}</td><td>${key.lastUsedAt ? dateTime.format(new Date(key.lastUsedAt)) : 'Nunca'}</td><td>${providerAccess}</td><td><span class="state-pill ${stateClass}">${stateLabel}</span></td><td>${actions}</td></tr>`;
+    const used = exactNumber.format(key.consumedTokens || 0);
+    const limitLabel = `${used} / ${key.tokenLimit == null ? 'Sin límite' : exactNumber.format(key.tokenLimit)}<small class="key-cache-summary">${exactNumber.format(key.cachedTokens || 0)} cacheados ahorrados</small>`;
+    const actions = `<div class="row-actions"><button class="row-action key-stats" data-id="${escapeHtml(key.id)}" data-name="${escapeHtml(key.name)}" type="button">Información del límite</button>${key.revokedAt ? '' : `${providerFilterButton}${accessAction}<button class="row-action set-key-limit" data-id="${escapeHtml(key.id)}" data-limit="${key.tokenLimit ?? ''}" type="button">Límite</button><button class="row-action revoke-key" data-id="${escapeHtml(key.id)}" data-name="${escapeHtml(key.name)}" type="button">Revocar</button>`}<button class="row-action delete-key" data-id="${escapeHtml(key.id)}" data-name="${escapeHtml(key.name)}" type="button">Eliminar</button></div>`;
+    return `<tr><td><strong>${escapeHtml(key.name)}</strong></td><td><code>${escapeHtml(key.prefix)}••••</code></td><td>${dateTime.format(new Date(key.createdAt))}</td><td>${key.lastUsedAt ? dateTime.format(new Date(key.lastUsedAt)) : 'Nunca'}</td><td>${limitLabel}</td><td>${providerAccess}</td><td><span class="state-pill ${stateClass}">${stateLabel}</span></td><td>${actions}</td></tr>`;
   }).join('');
   table.querySelectorAll('.pause-key').forEach((button) => button.addEventListener('click', () => openPauseDialog(button.dataset.id, false)));
   table.querySelectorAll('.edit-pause-message').forEach((button) => button.addEventListener('click', () => openPauseDialog(button.dataset.id, true)));
   table.querySelectorAll('.resume-key').forEach((button) => button.addEventListener('click', () => resumeKey(button.dataset.id)));
   table.querySelectorAll('.revoke-key').forEach((button) => button.addEventListener('click', () => revokeKey(button.dataset.id, button.dataset.name)));
+  table.querySelectorAll('.delete-key').forEach((button) => button.addEventListener('click', () => deleteKey(button.dataset.id, button.dataset.name)));
+  table.querySelectorAll('.set-key-limit').forEach((button) => button.addEventListener('click', () => setKeyLimit(button.dataset.id, button.dataset.limit)));
+  table.querySelectorAll('.key-stats').forEach((button) => button.addEventListener('click', () => openKeyStats(button.dataset.id, button.dataset.name)));
   table.querySelectorAll('.provider-filter').forEach((button) => button.addEventListener('click', () => openProviderFilter(button.dataset.id)));
   table.querySelectorAll('.key-provider-access').forEach((select) => select.addEventListener('change', async () => {
     select.disabled = true;
@@ -681,6 +686,42 @@ async function revokeKey(id, name) {
   try { await api(`/admin/api/keys/${encodeURIComponent(id)}`, { method: 'DELETE' }); toast('Clave revocada'); await loadAll(); } catch (error) { toast(error.message); }
 }
 
+async function deleteKey(id, name) {
+  if (!confirm(`¿Eliminar para siempre la clave “${name}” y sus datos de acceso? Esta acción no se puede deshacer.`)) return;
+  try { await api(`/admin/api/keys/${encodeURIComponent(id)}/permanent`, { method: 'DELETE' }); toast('Clave eliminada'); await loadAll(); }
+  catch (error) { toast(error.message); }
+}
+
+async function setKeyLimit(id, current) {
+  const value = prompt('Límite total de tokens para esta clave. Déjalo vacío para quitar el límite:', current);
+  if (value === null) return;
+  const tokenLimit = value.trim() === '' ? null : Number(value.trim());
+  if (tokenLimit !== null && (!Number.isSafeInteger(tokenLimit) || tokenLimit < 1)) { toast('Introduce un número entero positivo.'); return; }
+  try {
+    await api(`/admin/api/keys/${encodeURIComponent(id)}/limit`, { method: 'PATCH', body: JSON.stringify({ tokenLimit }) });
+    toast(tokenLimit === null ? 'Límite de tokens quitado' : 'Límite de tokens actualizado');
+    await loadAll();
+  } catch (error) { toast(error.message); }
+}
+
+async function openKeyStats(id, name) {
+  $('#key-stats-title').textContent = 'Información del límite';
+  $('#key-stats-subtitle').textContent = name;
+  $('#key-stats-content').innerHTML = '<div class="key-stats-loading">Cargando estadísticas…</div>';
+  $('#key-stats-dialog').showModal();
+  try {
+    const { stats } = await api(`/admin/api/keys/${encodeURIComponent(id)}/stats`);
+    const limit = stats.tokenLimit == null ? 'Sin límite' : exactNumber.format(stats.tokenLimit);
+    const available = stats.availableTokens == null ? '—' : exactNumber.format(stats.availableTokens);
+    const usedPercent = stats.usagePercent == null ? 'Sin límite' : `${stats.usagePercent.toFixed(1)}%`;
+    const cachePercent = stats.cachePercent == null ? 'No informado por el proveedor' : `${stats.cachePercent.toFixed(1)}%`;
+    const progress = stats.usagePercent == null ? '' : `<div class="key-stats-progress" role="progressbar" aria-label="Cuota consumida" aria-valuenow="${Math.round(stats.usagePercent)}" aria-valuemin="0" aria-valuemax="100"><span style="width:${Math.min(100, stats.usagePercent)}%"></span></div>`;
+    $('#key-stats-content').innerHTML = `${progress}<div class="key-stats-grid"><div><span>Tokens totales procesados</span><strong>${exactNumber.format(stats.totalTokens)}</strong></div><div><span>Consumo de cuota</span><strong>${exactNumber.format(stats.consumedTokens)}</strong><small>${usedPercent} del límite</small></div><div><span>Límite total</span><strong>${limit}</strong></div><div><span>Tokens disponibles</span><strong>${available}</strong></div><div><span>Entrada sin caché</span><strong>${exactNumber.format(stats.uncachedInputTokens)}</strong></div><div><span>Salida (thinking + decode)</span><strong>${exactNumber.format(stats.outputTokens)}</strong></div><div><span>Entrada cacheada ahorrada</span><strong>${exactNumber.format(stats.cachedTokens)}</strong></div><div><span>Porcentaje de caché</span><strong>${cachePercent}</strong></div></div><p class="key-stats-note">El consumo de cuota suma la entrada no cacheada y los tokens de salida. Los datos de caché dependen de que el proveedor los reporte.</p>`;
+  } catch (error) {
+    $('#key-stats-content').innerHTML = `<p class="form-message error">${escapeHtml(error.message)}</p>`;
+  }
+}
+
 let providerFilterSelection = new Set();
 
 function providerHost(baseUrl) {
@@ -861,6 +902,7 @@ $('#pause-default').addEventListener('click', () => { $('#pause-message').value 
 $('#copy-token').addEventListener('click', async () => { await navigator.clipboard.writeText($('#created-token').textContent); toast('Token copiado'); });
 $('#close-token-dialog').addEventListener('click', () => $('#token-dialog').close());
 $('#token-saved').addEventListener('click', () => $('#token-dialog').close());
+$('#close-key-stats').addEventListener('click', () => $('#key-stats-dialog').close());
 $('#copy-endpoint').addEventListener('click', async () => { await navigator.clipboard.writeText($('#gateway-url').textContent); toast('Endpoint copiado'); });
 $('#public-gateway-url').addEventListener('input', updateEndpointPreview);
 $('#add-external-provider').addEventListener('click', () => { state.settings.externalProviders.push(createExternalProvider()); renderExternalProviders(); });
