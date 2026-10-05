@@ -71,7 +71,9 @@ Los endpoints `/v1/models` de Proveedor IA Local no anuncian qué modalidades de
 }
 ```
 
-Cuando un modelo aparece en el mapa, `GET /v1/models` le añade `input_modalities` y `output_modalities`; los modelos sin declaración se devuelven intactos. El archivo se lee en cada consulta, por lo que los cambios aplican sin reiniciar. También se puede administrar por API con `GET /admin/api/model-capabilities` y `PUT /admin/api/model-capabilities` (cuerpo `{ "capabilities": { … } }`), que valida y reescribe el archivo.
+Cuando un modelo aparece en el mapa, `GET /v1/models` le añade `input_modalities` y `output_modalities`; los modelos sin declaración de modalidades no reciben esos campos. El archivo se lee en cada consulta, por lo que los cambios aplican sin reiniciar. También se puede administrar por API con `GET /admin/api/model-capabilities` y `PUT /admin/api/model-capabilities` (cuerpo `{ "capabilities": { … } }`), que valida y reescribe el archivo.
+
+benzIA anuncia además los parámetros específicos conocidos en `benzIA_supported_parameters`. Para Qwen 3.8 27B, `/v1/models` publica `reasoning_effort` como texto con los valores admitidos `low`, `medium` y `xhigh`. Los clientes pueden enviarlo en el cuerpo de una petición de inferencia, tanto en `/v1/chat/completions` como en `/v1/responses`; cualquier otro valor se rechaza con HTTP `400`.
 
 Declarar `input: ["text"]` en un modelo que no ve es intencionado: avisa a los clientes de que no deben enviarle imágenes. Y tenga en cuenta que algunos clientes (por ejemplo DSH) resuelven las modalidades desde su propia configuración de proveedor, no desde el endpoint, así que en ellos declare además la capacidad en su fichero de configuración (p. ej. `input: [text, image]` en la definición del modelo).
 
@@ -125,7 +127,7 @@ No se guardan prompts, mensajes, embeddings ni respuestas. Cada métrica contien
 | `BRAVE_SEARCH_ENDPOINT` | `https://api.search.brave.com/res/v1/web/search` | Endpoint opcional de contexto web de Brave |
 | `BRAVE_SEARCH_API_KEY` | — | Clave opcional de Brave Search; también configurable desde el panel |
 | `METRICS_RETENTION_DAYS` | `30` | Retención de telemetría |
-| `REQUEST_TIMEOUT_MS` | `300000` | Timeout de inferencia |
+| `REQUEST_TIMEOUT_MS` | `300000` | Límite de espera de cabeceras upstream y de respuestas no streaming; los streams no tienen timeout por inactividad ni duración total. |
 
 Cambiar los puertos requiere reiniciar el proceso. La URL y clave upstream, además de la URL pública que ven los clientes, se pueden actualizar en caliente desde el panel.
 

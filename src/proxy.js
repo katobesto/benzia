@@ -210,6 +210,12 @@ export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, 
     if (accessKey.pausedAt && !path.startsWith('/v1/models')) {
       return res.status(403).json(safeError(403, accessKey.pausedMessage || PAUSED_TOKEN_MESSAGE, 'access_disabled'));
     }
+    const isQwen38_27b = /qwen38.*27b|qwen.*27b.*38/i.test(String(body?.model || '').replace(/[._\s-]/g, ''));
+    if (isInference && isQwen38_27b && body?.reasoning_effort !== undefined && !['low', 'medium', 'xhigh'].includes(body.reasoning_effort)) {
+      const error = safeError(400, 'reasoning_effort para Qwen 3.8 27B debe ser low, medium o xhigh.', 'invalid_parameter');
+      error.error.param = 'reasoning_effort';
+      return res.status(400).json(error);
+    }
     if (isInference && accessKey.tokenLimit != null) {
       const remaining = Math.max(0, Number(accessKey.tokenLimit) - Number(accessKey.consumedTokens || 0));
       if (!remaining) return res.status(429).json(safeError(429, 'Has agotado los tokens disponibles para esta clave.', 'token_limit_exceeded'));
@@ -272,23 +278,33 @@ export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, 
     const controller = new AbortController();
     let timedOut = false;
     let clientDisconnected = false;
-    const timeout = setTimeout(() => {
-      timedOut = true;
-      controller.abort(new Error('Upstream timeout'));
-    }, config.requestTimeoutMs);
+    // REQUEST_TIMEOUT_MS limits the wait for upstream response headers only.
+    // Thinking and other generation phases can be quiet for a long time.
+    let timeout;
+    const startUpstreamTimeout = () => {
+      clearTimeout(timeout);
+      timeout = setTimeout(() => {
+        timedOut = true;
+        controller.abort(new Error('Upstream timeout'));
+      }, config.requestTimeoutMs);
+    };
+    const clearUpstreamTimeout = () => clearTimeout(timeout);
+    startUpstreamTimeout();
     const onRequestAborted = () => {
       clientDisconnected = true;
       controller.abort(new Error('El cliente canceló la petición.'));
     };
     const onResponseClosed = () => {
-      if (res.writableEnded) return;
+      // Node emits `close` after a normal `end()` too; only treat it as a
+      // cancellation when the response did not finish writing.
+      if (res.writableEnded || res.writableFinished) return;
       clientDisconnected = true;
       controller.abort(new Error('El cliente cerró la conexión.'));
     };
     req.once('aborted', onRequestAborted);
     res.once('close', onResponseClosed);
     const cleanupRequest = () => {
-      clearTimeout(timeout);
+      clearUpstreamTimeout();
       req.off('aborted', onRequestAborted);
       res.off('close', onResponseClosed);
     };
@@ -323,6 +339,7 @@ export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, 
         signal: controller.signal
       });
       upstream = await requestUpstream(upstreamBody);
+      clearUpstreamTimeout();
       // `stream_options.include_usage` es OpenAI-compatible, pero no todos los
       // servidores que implementan chat/completions lo reconocen todavía.
       // Reintentar sin esa extensión conserva la compatibilidad; en ese caso
@@ -330,8 +347,16 @@ export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, 
       if (upstream.status === 400 && path === '/v1/chat/completions' && upstreamBody?.stream_options?.include_usage) {
         const compatibleBody = structuredClone(upstreamBody);
         delete compatibleBody.stream_options;
+        timedOut = false;
+        // Re-establish a fresh connection timeout for the compatibility retry.
+        startUpstreamTimeout();
         upstream = await requestUpstream(compatibleBody);
+        clearUpstreamTimeout();
       }
+      // Non-streaming responses still need a bounded body read. A streaming
+      // response, however, remains open across arbitrary provider/network
+      // pauses until it finishes or the client disconnects.
+      if (!isStream) startUpstreamTimeout();
     } catch (error) {
       cleanupRequest();
       if (trackLive) liveActivity?.finish(requestId);
@@ -364,6 +389,9 @@ export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, 
       res.set({ 'cache-control': 'no-cache, no-transform', 'x-accel-buffering': 'no' });
       res.flushHeaders?.();
       const reader = upstream.body.getReader();
+      const cancelUpstream = () => { void reader.cancel().catch(() => {}); };
+      controller.signal.addEventListener('abort', cancelUpstream, { once: true });
+      if (controller.signal.aborted) cancelUpstream();
       const decoder = new TextDecoder();
       let sseBuffer = '';
       let lastPayload = {};
@@ -410,6 +438,7 @@ export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, 
         }
       }
       cleanupRequest();
+      controller.signal.removeEventListener('abort', cancelUpstream);
       const completedAt = Date.now();
       const usage = extractUsage(lastPayload, body, outputText);
       const telemetry = extractUpstreamTelemetry(lastPayload, {

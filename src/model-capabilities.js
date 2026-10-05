@@ -4,6 +4,11 @@ import path from 'node:path';
 export const CAPABILITIES_FILENAME = 'model-capabilities.json';
 export const MAX_CAPABILITIES = 200;
 const MODALITIES = new Set(['text', 'image']);
+const QWEN38_REASONING_EFFORTS = ['low', 'medium', 'xhigh'];
+
+function hasQwen38_27bReasoning(modelId) {
+  return /qwen38.*27b|qwen.*27b.*38/i.test(String(modelId || '').replace(/[._\s-]/g, ''));
+}
 
 /**
  * Normaliza y valida el mapa de capacidades de modelo.
@@ -95,22 +100,27 @@ export async function loadModelCapabilities(dataDir) {
 
 /**
  * Devuelve una copia del modelo con `input_modalities` y `output_modalities`
- * cuando el mapa lo declara. Prueba primero el ID público expuesto (con el
- * prefijo de proveedor externo) y después el ID original del proveedor, de
- * modo que una sola entrada cubra ambos.
+ * cuando el mapa lo declara. También anota parámetros conocidos de benzIA.
+ * Prueba primero el ID público expuesto (con el prefijo externo) y después
+ * el ID original del proveedor, de modo que una sola entrada cubra ambos.
  */
 export function annotateModel(model, capabilities = {}) {
   if (!model || typeof model !== 'object' || typeof model.id !== 'string') return model;
+  const qwenReasoning = hasQwen38_27bReasoning(model.id);
   let declared = capabilities[model.id];
   if (!declared && model.benzIA_provider && typeof model.benzIA_provider.id === 'string') {
     const prefix = `${model.benzIA_provider.id}/`;
     if (model.id.startsWith(prefix)) declared = capabilities[model.id.slice(prefix.length)];
   }
-  if (!declared) return model;
+  if (!declared && !qwenReasoning) return model;
   return {
     ...model,
-    input_modalities: [...declared.input],
-    output_modalities: [...declared.output]
+    ...(declared ? { input_modalities: [...declared.input], output_modalities: [...declared.output] } : {}),
+    ...(qwenReasoning ? {
+      benzIA_supported_parameters: {
+        reasoning_effort: { type: 'string', enum: [...QWEN38_REASONING_EFFORTS] }
+      }
+    } : {})
   };
 }
 

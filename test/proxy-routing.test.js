@@ -519,14 +519,17 @@ test('reintenta chat completions sin stream_options si el proveedor no la admite
   assert.equal(receivedBodies[1].stream_options, undefined);
 });
 
-test('mantiene el timeout durante todo el stream y registra la interrupción', async (t) => {
+test('no corta un stream activo durante una pausa larga de pensamiento', async (t) => {
   const upstream = express();
   upstream.use(express.json());
   upstream.post('/v1/chat/completions', (_req, res) => {
     res.type('text/event-stream');
     res.flushHeaders();
     res.write('data: {"choices":[{"delta":{"content":"Inicio"}}]}\n\n');
-    res.on('close', () => res.end());
+    setTimeout(() => {
+      res.write('data: {"choices":[{"delta":{"content":" y fin"}}]}\n\n');
+      res.end('data: [DONE]\n\n');
+    }, 150);
   });
   const upstreamServer = upstream.listen(0, '127.0.0.1');
   await new Promise((resolve) => upstreamServer.once('listening', resolve));
@@ -555,8 +558,9 @@ test('mantiene el timeout durante todo el stream y registra la interrupción', a
 
   assert.equal(response.status, 200);
   assert.match(body, /Inicio/);
-  assert.match(body, /upstream_timeout/);
-  assert.equal(metrics[0].status, 504);
+  assert.match(body, /y fin/);
+  assert.doesNotMatch(body, /upstream_timeout/);
+  assert.equal(metrics[0].status, 200);
   assert.equal(metrics[0].stream, true);
 });
 
