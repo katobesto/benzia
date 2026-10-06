@@ -48,6 +48,9 @@ test('lee el archivo de capacidades del directorio de datos', async (t) => {
   await fs.writeFile(path.join(dir, CAPABILITIES_FILENAME), JSON.stringify({ 'v': { input: ['text', 'image'] } }));
   assert.deepEqual(await loadModelCapabilities(dir), { v: { input: ['text', 'image'], output: ['text'] } });
 
+  await fs.writeFile(path.join(dir, CAPABILITIES_FILENAME), `\uFEFF${JSON.stringify({ v: { input: ['text', 'image'] } })}`, 'utf8');
+  assert.deepEqual(await loadModelCapabilities(dir), { v: { input: ['text', 'image'], output: ['text'] } }, 'tolera un BOM UTF-8 al inicio');
+
   await fs.writeFile(path.join(dir, CAPABILITIES_FILENAME), '{ no es json');
   assert.deepEqual(await loadModelCapabilities(dir), {}, 'un archivo corrupto degrada en lugar de romper /v1/models');
 });

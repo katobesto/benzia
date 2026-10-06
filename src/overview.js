@@ -9,7 +9,13 @@ function parseDateValue(value, endOfDay = false) {
 
 // Shared by the administrative panel and the read-only /status view so both
 // render exactly the same operating summary.
+const overviewCache = new WeakMap();
 export function buildOverviewPayload(store, query = {}) {
+  const cacheKey = JSON.stringify(query);
+  const cache = overviewCache.get(store) || new Map();
+  overviewCache.set(store, cache);
+  const cached = cache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
   const hours = Math.min(24 * 90, Math.max(1, Number.parseInt(query.hours || '24', 10)));
   const keyId = typeof query.keyId === 'string' ? query.keyId : undefined;
   const model = typeof query.model === 'string' && query.model ? query.model : undefined;
@@ -26,13 +32,18 @@ export function buildOverviewPayload(store, query = {}) {
   const from = fromDate.toISOString();
   const to = toDate.toISOString();
   const keys = store.listKeys();
-  const metrics = store.getMetrics({ from, to, keyId, model, limit: 50000 });
-  return {
+  const bucket = rangeHours > 72 ? 'day' : 'hour';
+  const metrics = store.getMetrics({ from, to, keyId, model, limit: store.getMetricsSummary ? 20 : 50000 });
+  const summary = store.getMetricsSummary ? store.getMetricsSummary({ from, to, keyId, model, bucket }, keys) : summarizeMetrics(metrics, keys, bucket);
+  const result = {
     payload: {
       range: { from, to, hours: rangeHours },
       models: store.getModels({ from, to, keyId }),
-      ...summarizeMetrics(metrics, keys, rangeHours > 72 ? 'day' : 'hour'),
+      ...summary,
       recent: metrics.slice(-20).reverse()
     }
   };
+  cache.set(cacheKey, { value: result, expiresAt: Date.now() + 3000 });
+  if (cache.size > 100) cache.delete(cache.keys().next().value);
+  return result;
 }

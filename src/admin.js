@@ -160,6 +160,10 @@ export function createAdminApp({ config, store, liveActivity }) {
     res.json(liveActivity?.snapshot({ keyId }) || { activeStreams: 0, tokensPerSecond: 0, streams: [] });
   });
 
+  app.get('/admin/api/security-events', auth, (_req, res) => {
+    res.json({ events: store.getSecurityEvents?.({ limit: 100 }) || [] });
+  });
+
   app.get('/admin/api/keys', auth, (_req, res) => res.json({ keys: store.listKeys() }));
 
   app.get('/admin/api/keys/:id/stats', auth, (req, res) => {

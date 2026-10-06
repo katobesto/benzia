@@ -58,7 +58,7 @@ export function canPlanWithExternalProvider(externalRoute, accessKey = {}) {
   return accessKey.externalProviderIds == null || accessKey.externalProviderIds.includes(externalRoute.provider.id);
 }
 
-async function planWithModel({ config, settings, model, messages, accessKey, store }) {
+async function planWithModel({ config, settings, model, messages, accessKey, store, signal }) {
   const startedAt = Date.now();
   const body = {
     model,
@@ -73,7 +73,9 @@ async function planWithModel({ config, settings, model, messages, accessKey, sto
   if (!canPlanWithExternalProvider(externalRoute, accessKey)) return fallbackPlan(messages);
   const provider = externalRoute?.provider || null;
   if (provider) body.model = externalRoute.upstreamModel;
+  let release = () => {};
   try {
+    if (config.inferenceAdmission) release = await config.inferenceAdmission.acquire(provider?.baseUrl || settings.upstreamBaseUrl, signal);
     const response = await fetch(`${provider?.baseUrl || settings.upstreamBaseUrl}/v1/chat/completions`, {
       method: 'POST',
       headers: {
@@ -82,7 +84,7 @@ async function planWithModel({ config, settings, model, messages, accessKey, sto
         ...((provider?.apiKey || settings.upstreamApiKey) ? { authorization: `Bearer ${provider?.apiKey || settings.upstreamApiKey}` } : {})
       },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(Math.min(config.requestTimeoutMs, 45_000))
+      signal: AbortSignal.any([AbortSignal.timeout(Math.min(config.requestTimeoutMs, 45_000)), ...(signal ? [signal] : [])])
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -95,16 +97,17 @@ async function planWithModel({ config, settings, model, messages, accessKey, sto
       throughputSource: 'unavailable', telemetryVersion: 2, generationDurationMs: null, timeToFirstTokenMs: null, stream: false
     });
     return parseResearchPlan(output, messages);
-  } catch {
+  } catch (error) {
+    if (signal?.aborted) throw error;
     return fallbackPlan(messages);
-  }
+  } finally { release(); }
 }
 
 function formatEvidence(entries) {
   return entries.map((source, index) => `[${index + 1}] ${source.title}\nURL: ${source.url}\nExtracto: ${source.snippets || '(sin extracto disponible)'}`).join('\n\n');
 }
 
-export async function runResearch({ config, store, accessKey, model, messages, emit }) {
+export async function runResearch({ config, store, accessKey, model, messages, emit, signal }) {
   const stored = store.getSettings();
   const settings = {
     upstreamBaseUrl: (stored.upstreamBaseUrl || config.upstreamBaseUrl).replace(/\/+$/, ''),
@@ -122,7 +125,7 @@ export async function runResearch({ config, store, accessKey, model, messages, e
   }
 
   emit('research.status', { step: 'planning', label: 'Entendiendo tu consulta' });
-  const plan = await planWithModel({ config, settings, model, messages: safeMessages, accessKey, store });
+  const plan = config.researchDirectSearch ? fallbackPlan(safeMessages) : await planWithModel({ config, settings, model: config.researchPlannerModel || model, messages: safeMessages, accessKey, store, signal });
   emit('research.plan', { topic: plan.topic, shouldSearch: plan.shouldSearch, queries: plan.queries });
   if (!plan.shouldSearch) {
     emit('research.status', { step: 'complete', label: 'El contexto de la conversación es suficiente; redactando respuesta' });
@@ -132,10 +135,11 @@ export async function runResearch({ config, store, accessKey, model, messages, e
   emit('research.status', { step: 'searching', label: `Buscando ${plan.queries.length} fuente${plan.queries.length === 1 ? '' : 's'} de información` });
 
   const settled = await Promise.allSettled(plan.queries.map(async (query, index) => {
-    const result = await searchBrave({ endpoint: settings.braveSearchEndpoint, apiKey: settings.braveSearchApiKey, query });
+    const result = await searchBrave({ endpoint: settings.braveSearchEndpoint, apiKey: settings.braveSearchApiKey, query, signal });
     emit('research.search', { index: index + 1, total: plan.queries.length, query, sources: result.sources.length });
     return result;
   }));
+  signal?.throwIfAborted();
   const successes = settled.filter((result) => result.status === 'fulfilled').map((result) => result.value);
   if (!successes.length) throw new Error('Brave no pudo devolver fuentes para esta investigación.');
 

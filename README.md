@@ -121,6 +121,7 @@ No se guardan prompts, mensajes, embeddings ni respuestas. Cada métrica contien
 | `ADMIN_HOST` | `127.0.0.1` | Interfaz del panel |
 | `ADMIN_PORT` | `3400` | Puerto del panel |
 | `GATEWAY_HOST` | `0.0.0.0` | Interfaz pública del gateway |
+| `TRUST_CLOUDFLARE_PROXY` | `false` | Confía en la IP enviada por Cloudflare al limitar solicitudes; actívelo sólo si el origen no es accesible fuera del túnel |
 | `GATEWAY_PORT` | `3401` | Puerto compatible con OpenAI |
 | `PUBLIC_GATEWAY_URL` | `http://localhost:3401` | URL mostrada en el panel |
 | `LM_STUDIO_BASE_URL` | `http://127.0.0.1:1234` | Servidor de Proveedor IA Local |
@@ -128,6 +129,9 @@ No se guardan prompts, mensajes, embeddings ni respuestas. Cada métrica contien
 | `BRAVE_SEARCH_API_KEY` | — | Clave opcional de Brave Search; también configurable desde el panel |
 | `METRICS_RETENTION_DAYS` | `30` | Retención de telemetría |
 | `REQUEST_TIMEOUT_MS` | `300000` | Límite de espera de cabeceras upstream y de respuestas no streaming; los streams no tienen timeout por inactividad ni duración total. |
+| `RATE_LIMIT_AUTH_PER_MINUTE` | `20` | Intentos fallidos por IP y minuto |
+| `RATE_LIMIT_KEY_PER_MINUTE` | `120` | Solicitudes generales por clave y minuto |
+| `RATE_LIMIT_INFERENCE_PER_MINUTE` | `20` | Inferencias por clave y minuto |
 
 Cambiar los puertos requiere reiniciar el proceso. La URL y clave upstream, además de la URL pública que ven los clientes, se pueden actualizar en caliente desde el panel.
 
@@ -177,3 +181,11 @@ En un VPS no se debe usar `127.0.0.1:1234` para `LM_STUDIO_BASE_URL` salvo que e
 benzIA está pensado para redes de confianza. Para acceso por Internet, colóquelo detrás de Caddy, nginx o un túnel con TLS; limite el panel a localhost/VPN; proteja y copie el volumen `data`; y no reutilice `ADMIN_TOKEN` como clave de usuario.
 
 Ejecute las pruebas con `npm test`.
+
+### Preparación para tráfico concurrente
+
+El catálogo de modelos se comparte durante 15 segundos y se invalida al guardar configuración. El resumen del dashboard se calcula en SQL y se comparte durante 3 segundos. La lectura de telemetría de llama.cpp es asíncrona e incremental; puede actualizarse con un pequeño retraso.
+
+`MAX_CONCURRENT_INFERENCE` limita inferencias simultáneas por URL de proveedor, incluyendo la planificación web. Su valor predeterminado `0` conserva la capacidad actual sin imponer un límite sin medir el motor. Al activarlo, `INFERENCE_QUEUE_SIZE` (16) limita las peticiones en espera y `INFERENCE_QUEUE_WAIT_MS` (10000) su espera máxima. La saturación del gateway responde 429 con Retry-After. Estos contadores y cachés son locales a cada proceso. El rate limit por IP cuenta sólo accesos con credenciales inválidas; las claves válidas tienen sus propios límites.
+
+Opcionalmente, `RESEARCH_PLANNER_MODEL` permite elegir un modelo pequeño para planificar búsquedas (se respetan los permisos de proveedores de la clave); vacío utiliza el modelo elegido por el usuario. `RESEARCH_DIRECT_SEARCH=true` utiliza directamente una consulta contextual sin la inferencia previa de planificación. Ambos mantienen su comportamiento actual por defecto.

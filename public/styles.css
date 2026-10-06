@@ -181,6 +181,11 @@ td code { color: var(--muted); font: 9px var(--mono); }
 .key-provider-access:disabled { opacity: .5; }
 .empty-cell { height: 130px; text-align: center; color: var(--muted-2); font: 10px var(--mono); }
 .activity-head, .activity-row { display: grid; grid-template-columns: 75px minmax(110px,1fr) minmax(180px,1.5fr) 90px 105px 85px 48px; gap: 13px; align-items: center; }
+.security-events-head, .security-event-row { display: grid; grid-template-columns: 145px minmax(130px,1fr) minmax(100px,1fr) minmax(150px,1.3fr) 100px 85px; gap: 13px; align-items: center; }
+.security-events-head { min-height: 39px; padding: 0 18px; color: var(--muted-2); background: #0d1218; border-bottom: 1px solid var(--border); font: 700 8px var(--mono); letter-spacing: .06em; text-transform: uppercase; }
+.security-event-row { min-height: 54px; padding: 0 18px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: 10px; }
+.security-event-row code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--cyan); font: 9px var(--mono); }
+.security-event-row strong { color: var(--text); }
 .activity-head { height: 39px; padding: 0 18px; color: var(--muted-2); background: #0d1218; border-bottom: 1px solid var(--border); font: 700 7px var(--mono); letter-spacing: .08em; text-transform: uppercase; }
 .activity-row { min-height: 56px; padding: 0 18px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: 9px; }
 .activity-row:last-child { border-bottom: 0; }
@@ -445,6 +450,11 @@ html { overflow-x: hidden; }
   .settings-actions { align-items: stretch; flex-direction: column; gap: 12px; }
   .settings-actions > div { display: grid; grid-template-columns: 1fr 1fr; }
   .activity-head { display: none; }
+  .security-events-head { display: none; }
+  .security-event-row { grid-template-columns: minmax(0,1fr) max-content; gap: 7px 12px; padding: 12px 14px; }
+  .security-event-row > :nth-child(3), .security-event-row > :nth-child(5) { display: none; }
+  .security-event-row > :nth-child(4) { grid-column: 1; }
+  .security-event-row > :nth-child(6) { grid-column: 2; grid-row: 2; }
   .activity-row { grid-template-columns: 65px minmax(0,1fr) max-content; padding: 12px 14px; }
   .activity-path, .activity-tokens, .activity-latency, .http-status { display: none; }
   .key-bar-row { grid-template-columns: 95px 1fr; }

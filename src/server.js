@@ -8,6 +8,8 @@ import { createGatewayApp } from './proxy.js';
 import { SqliteStore } from './store.js';
 import { LiveActivity } from './live-activity.js';
 import { createLlamaLogReader } from './llama-log.js';
+import { RateLimiter } from './rate-limit.js';
+import { InferenceAdmission } from './inference-admission.js';
 
 const config = loadConfig();
 
@@ -19,11 +21,13 @@ if (config.adminPort === config.gatewayPort) {
 const store = new SqliteStore(config.dataDir, config.metricsRetentionDays);
 await store.init();
 const liveActivity = new LiveActivity({ prefillRateReader: createLlamaLogReader(config.llamaCppLogPath) });
+const rateLimiter = new RateLimiter({ limit: config.rateLimitAuthPerMinute });
 
+config.inferenceAdmission = new InferenceAdmission({ limit: config.maxConcurrentInference, maxQueue: config.inferenceQueueSize, waitMs: config.inferenceQueueWaitMs });
 const adminApp = createAdminApp({ config, store, liveActivity });
-const chatApp = createChatApp({ config, store });
+const chatApp = createChatApp({ config, store, rateLimiter });
 const statusApp = createStatusApp({ config, store, liveActivity });
-const gatewayApp = createGatewayApp({ config, store, adminApp, chatApp, statusApp, liveActivity });
+const gatewayApp = createGatewayApp({ config, store, adminApp, chatApp, statusApp, liveActivity, rateLimiter });
 
 const adminServer = adminApp.listen(config.adminPort, config.adminHost, () => {
   console.log(`Panel:   http://localhost:${config.adminPort}`);

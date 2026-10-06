@@ -3,6 +3,7 @@ const routes = {
   '/dashboard': 'dashboard',
   '/keys': 'keys',
   '/activity': 'activity',
+  '/security': 'security',
   '/utilities': 'utilities',
   '/server': 'server',
   '/settings': 'settings'
@@ -129,14 +130,19 @@ async function loadAll() {
     return;
   }
   const requests = [api('/admin/api/keys'), api('/admin/api/settings')];
+  if (pageName === 'security') requests.push(api('/admin/api/security-events'));
   if (pageName === 'dashboard' || pageName === 'activity') requests.push(api(`/admin/api/overview?${overviewQuery()}`));
-  const [[keyData, settings, overview], live] = await Promise.all([
+  const [loaded, live] = await Promise.all([
     Promise.all(requests),
     pageName === 'dashboard' ? api('/admin/api/live') : Promise.resolve(null)
   ]);
+  const [keyData, settings] = loaded;
+  const overview = pageName === 'dashboard' || pageName === 'activity' ? loaded[2] : null;
+  const security = pageName === 'security' ? loaded[2] : null;
   state.keys = keyData.keys;
   state.settings = settings;
   state.overview = overview || null;
+  if (pageName === 'security') renderSecurityEvents(security?.events || []);
   state.live = live;
   if (pageName === 'server') {
     await api('/admin/api/server-session', { method: 'POST', body: '{}' });
@@ -148,8 +154,23 @@ async function loadAll() {
   renderSettings();
   renderOpenCodeUtility();
   if (state.overview) renderOverview();
+  if (pageName === 'security') {
+    clearInterval(window.securityRefreshTimer);
+    window.securityRefreshTimer = setInterval(async () => {
+      if (document.visibilityState !== 'visible' || pageName !== 'security') return;
+      try { renderSecurityEvents((await api('/admin/api/security-events')).events); } catch { /* La siguiente actualización volverá a intentarlo. */ }
+    }, 15000);
+  } else clearInterval(window.securityRefreshTimer);
   if (state.live) renderLive();
   checkUpstream();
+}
+
+function renderSecurityEvents(events = []) {
+  const container = $('#security-events');
+  if (!container) return;
+  if (!events.length) { container.innerHTML = '<div class="empty-state">No hay eventos de rate limit registrados</div>'; return; }
+  const labels = { auth_rate_limit: 'Autenticación por IP', key_rate_limit: 'Solicitudes por clave', general_rate_limit: 'Solicitudes de chat', inference_rate_limit: 'Inferencias por clave' };
+  container.innerHTML = events.map((event) => `<div class="security-event-row"><span>${dateTime.format(new Date(event.at))}</span><strong>${escapeHtml(labels[event.type] || event.type)}</strong><span>${escapeHtml(event.identity || 'Desconocida')}</span><code>${escapeHtml(event.route)}</code><code>${escapeHtml(event.addressFingerprint || '—')}</code><span>${exactNumber.format(event.retryAfterSeconds)} s</span></div>`).join('');
 }
 
 async function refreshOverview() {
@@ -867,6 +888,11 @@ $('#activity-clear-date-filter').addEventListener('click', () => {
   $('#activity-from-date').value = '';
   $('#activity-to-date').value = '';
   if (pageName === 'activity') refreshOverview();
+});
+
+$('#security-refresh')?.addEventListener('click', async () => {
+  try { const result = await api('/admin/api/security-events'); renderSecurityEvents(result.events); }
+  catch (error) { toast(error.message); }
 });
 $$('[data-open-key-dialog]').forEach((button) => button.addEventListener('click', () => { $('#key-form').reset(); $('#key-message').textContent = ''; $('#key-dialog').showModal(); setTimeout(() => $('#key-name').focus(), 50); }));
 $('#key-form').addEventListener('submit', async (event) => {

@@ -27,12 +27,16 @@ export class LiveActivity {
     });
   }
 
-  update(id, outputText) {
+  update(id, outputText, fragment) {
     const item = this.active.get(id);
     if (!item || !outputText) return;
     const now = this.now();
     item.outputText = outputText;
-    item.outputTokensApprox = estimateTokens(outputText);
+    if (fragment === undefined) item.outputTokensApprox = estimateTokens(outputText);
+    else {
+      item.estimatedUnits = (item.estimatedUnits || 0) + [...fragment].reduce((sum, char) => sum + (char.charCodeAt(0) < 128 ? 1 : char.length * 2), 0);
+      item.outputTokensApprox = Math.ceil(item.estimatedUnits / 4);
+    }
     if (!item.firstTokenAt) {
       item.firstTokenAt = now;
       item.samples.push({ at: now, tokens: 0 });

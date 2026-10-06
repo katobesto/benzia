@@ -200,14 +200,15 @@ function selectedModel() {
   return $('#model-select').value || state.models.find((model) => !state.hideFailedModels || !state.failedModels.has(model)) || '';
 }
 
-function isQwen38_27b(model) {
-  return /qwen38.*27b|qwen.*27b.*38/i.test(String(model || '').replace(/[._\s-]/g, ''));
+function supportsQwen38ReasoningEffort(model) {
+  const normalized = String(model || '').replace(/[._\s-]/g, '');
+  return /qwen38.*27b|qwen.*27b.*38|qwen38.*flashnext|qwen.*flash.*next.*38/i.test(normalized);
 }
 
 function renderReasoningEffortControl() {
   const control = $('#reasoning-effort-control');
   const select = $('#reasoning-effort');
-  const visible = isQwen38_27b(selectedModel());
+  const visible = supportsQwen38ReasoningEffort(selectedModel());
   control.classList.toggle('hidden', !visible);
   select.disabled = !visible || state.generating || state.modelsLoading || state.modelHealthRunning;
 }
@@ -729,9 +730,13 @@ function computeStats(message, timing, usage) {
   const endTime = performance.now();
   const responseTimeMs = endTime - timing.startedAt;
   const ttftMs = timing.firstTokenAt ? timing.firstTokenAt - timing.startedAt : null;
-  const inputTokens = usage?.input_tokens ?? 0;
-  const outputTokens = usage?.output_tokens ?? 0;
-  const reasoningTokens = usage?.output_tokens_details?.reasoning_tokens ?? 0;
+  const reportedInputTokens = usage?.input_tokens ?? usage?.prompt_tokens ?? null;
+  const inputTokens = reportedInputTokens ?? timing.inputTokenEstimate ?? 0;
+  const reportedOutputTokens = usage?.output_tokens ?? usage?.completion_tokens ?? null;
+  const outputTokens = reportedOutputTokens ?? estimateTokens(`${message.thinking || ''}${message.content || ''}`);
+  const reportedReasoningTokens = usage?.output_tokens_details?.reasoning_tokens;
+  const estimatedReasoningTokens = reportedReasoningTokens == null && message.thinking ? estimateTokens(message.thinking) : 0;
+  const reasoningTokens = reportedReasoningTokens ?? estimatedReasoningTokens;
   const visibleOutputTokens = Math.max(0, outputTokens - reasoningTokens);
   // Prefill: tokens de entrada reales si el modelo los reporta; si no, la
   // estimación local del tamaño del contexto enviado.
@@ -755,8 +760,12 @@ function computeStats(message, timing, usage) {
     prefillTokensPerSec: prefillTokensPerSec ? Math.round(prefillTokensPerSec * 10) / 10 : null,
     generationTokensPerSec: generationTokensPerSec ? Math.round(generationTokensPerSec * 10) / 10 : null,
     inputTokens,
+    inputTokensEstimated: reportedInputTokens == null,
     outputTokens,
+    outputTokensEstimated: reportedOutputTokens == null,
+    totalTokens: inputTokens + outputTokens,
     reasoningTokens,
+    reasoningTokensEstimated: reportedReasoningTokens == null,
     visibleOutputTokens,
     hasUsage: Boolean(usage)
   };
@@ -779,7 +788,9 @@ function liveGenerationRate(timing, now) {
 }
 
 function livePhaseChips(timing, now) {
-  const chips = [];
+  const generatedEstimate = timing.generatedTokenEstimate || 0;
+  const inputEstimate = timing.inputTokenEstimate || 0;
+  const chips = [statChip('total', `≈ ${formatCount(inputEstimate + generatedEstimate)} tokens`), statChip('contexto', `≈ ${formatCount(inputEstimate)}`)];
   const elapsedMs = now - timing.startedAt;
   if (!timing.firstTokenAt) {
     // Prefill en curso: estimación en vivo según el tamaño del contexto enviado.
@@ -815,6 +826,10 @@ function formatTps(value) {
   return String(Math.round(value * 10) / 10);
 }
 
+function formatCount(value) {
+  return new Intl.NumberFormat('es-ES', { maximumFractionDigits: 0 }).format(Math.max(0, Number(value) || 0));
+}
+
 function formatMs(ms) {
   if (!Number.isFinite(ms) || ms < 0) return '—';
   if (ms < 1000) return `${Math.round(ms)}ms`;
@@ -838,12 +853,26 @@ function buildStatsDom(message) {
   }
   const stats = message.stats;
   if (!stats) return container;
+  if (stats.totalTokens > 0) {
+    const prefix = stats.inputTokensEstimated || stats.outputTokensEstimated ? '≈ ' : '';
+    const chip = statChip('total', `${prefix}${formatCount(stats.totalTokens)} tokens`);
+    if (prefix) chip.title = 'Total estimado porque el proveedor no reportó todos los tokens.';
+    container.append(chip);
+  }
+  if (stats.inputTokens > 0) {
+    const prefix = stats.inputTokensEstimated ? '≈ ' : '';
+    const chip = statChip('contexto', `${prefix}${formatCount(stats.inputTokens)} tokens`);
+    if (stats.inputTokensEstimated) chip.title = 'Estimación local: el proveedor no informó el número real de tokens de entrada.';
+    container.append(chip);
+  }
   if (stats.responseTimeMs) container.append(statChip('respuesta', formatMs(stats.responseTimeMs)));
   if (stats.generationTokensPerSec) container.append(statChip('generación', `${formatTps(stats.generationTokensPerSec)} tok/s`));
   if (stats.prefillTokensPerSec) container.append(statChip('prefill', `${formatTps(stats.prefillTokensPerSec)} tok/s`));
   if (stats.outputTokens > 0) {
-    const tokenLabel = `${stats.inputTokens}→${stats.visibleOutputTokens}` + (stats.reasoningTokens ? ` (+${stats.reasoningTokens} CoT)` : '');
-    container.append(statChip('tokens', tokenLabel));
+    const tokenLabel = `${stats.inputTokensEstimated ? '≈' : ''}${formatCount(stats.inputTokens)}→${formatCount(stats.visibleOutputTokens)}` + (stats.reasoningTokens ? ` (+${formatCount(stats.reasoningTokens)} CoT)` : '');
+    const tokenChip = statChip('tokens', tokenLabel);
+    if (stats.reasoningTokensEstimated && stats.reasoningTokens > 0) tokenChip.title = 'Los tokens de pensamiento son una estimación local.';
+    container.append(tokenChip);
   }
   return container;
 }
@@ -1407,7 +1436,7 @@ function updatePendingMessage(conversation, content, thinking = null) {
   message.content = content;
   if (thinking !== null) message.thinking = thinking;
   if (pendingMarkdownFrame) return;
-  pendingMarkdownFrame = requestAnimationFrame(() => {
+  pendingMarkdownFrame = setTimeout(() => {
     pendingMarkdownFrame = 0;
     const article = $(`.message[data-index="${conversation.messages.length - 1}"]`);
     if (!article) return;
@@ -1425,7 +1454,7 @@ function updatePendingMessage(conversation, content, thinking = null) {
     if (thinkingPanel) syncThinkingLine(thinkingPanel, message);
     const statsEl = article.querySelector('.message-stats');
     if (statsEl) statsEl.replaceChildren(...buildStatsDom(message).children);
-  });
+  }, 100);
 }
 
 // The chips must keep moving between network fragments (for example, while the
@@ -1538,7 +1567,7 @@ async function requestResearch(conversation) {
 }
 
 async function requestCompletion(conversation, webContext = '', useExistingPending = false) {
-  const reasoningEffort = isQwen38_27b(conversation.model) ? $('#reasoning-effort').value : null;
+  const reasoningEffort = supportsQwen38ReasoningEffort(conversation.model) ? $('#reasoning-effort').value : null;
   const context = conversation.messages
     .filter((message) => !message.pending && !message.error && (message.content.trim() || normalizedAttachments(message.attachments).length))
     .map((message) => ({ type: 'message', role: message.role, content: contentForResponses(message) }));
@@ -1561,7 +1590,8 @@ async function requestCompletion(conversation, webContext = '', useExistingPendi
     lastTokenAt: 0,
     lastVisibleAt: 0,
     samples: [],
-    inputTokenEstimate: estimateContextInputTokens(context)
+    inputTokenEstimate: estimateContextInputTokens(context),
+    generatedTokenEstimate: 0
   };
 
   let output = '';
@@ -1655,6 +1685,7 @@ async function requestCompletion(conversation, webContext = '', useExistingPendi
           if (!timing.firstTokenAt) timing.firstTokenAt = now;
           timing.lastTokenAt = now;
           timing.samples.push({ at: now, tokens: estimateTokens(thinking) + estimateTokens(output) });
+          timing.generatedTokenEstimate = estimateTokens(thinking) + estimateTokens(output);
           while (timing.samples.length > 2 && timing.samples[1].at < now - LIVE_RATE_WINDOW_MS) timing.samples.shift();
         }
         const upstreamStats = payload.response?.stats || payload.stats;

@@ -18,6 +18,7 @@ export function loadConfig() {
     adminHost: process.env.ADMIN_HOST || '127.0.0.1',
     adminPort: numberFromEnv('ADMIN_PORT', 3400, { min: 1, max: 65535 }),
     gatewayHost: process.env.GATEWAY_HOST || '0.0.0.0',
+    trustCloudflareProxy: process.env.TRUST_CLOUDFLARE_PROXY === 'true',
     gatewayPort: numberFromEnv('GATEWAY_PORT', 3401, { min: 1, max: 65535 }),
     publicGatewayUrl: normalizeBaseUrl(process.env.PUBLIC_GATEWAY_URL || `http://localhost:${process.env.GATEWAY_PORT || 3401}`),
     upstreamBaseUrl: normalizeBaseUrl(process.env.LM_STUDIO_BASE_URL || 'http://127.0.0.1:1234'),
@@ -28,6 +29,14 @@ export function loadConfig() {
     braveSearchApiKey: process.env.BRAVE_SEARCH_API_KEY || '',
     dataDir: path.resolve(process.env.DATA_DIR || './data'),
     requestTimeoutMs: numberFromEnv('REQUEST_TIMEOUT_MS', 300000, { min: 1000, max: 1800000 }),
+    rateLimitAuthPerMinute: numberFromEnv('RATE_LIMIT_AUTH_PER_MINUTE', 20, { min: 1, max: 10000 }),
+    rateLimitKeyPerMinute: numberFromEnv('RATE_LIMIT_KEY_PER_MINUTE', 120, { min: 1, max: 100000 }),
+    rateLimitInferencePerMinute: numberFromEnv('RATE_LIMIT_INFERENCE_PER_MINUTE', 20, { min: 1, max: 10000 }),
+    researchPlannerModel: process.env.RESEARCH_PLANNER_MODEL || '',
+    researchDirectSearch: process.env.RESEARCH_DIRECT_SEARCH === 'true',
+    maxConcurrentInference: numberFromEnv('MAX_CONCURRENT_INFERENCE', 0, { min: 0, max: 1000 }),
+    inferenceQueueSize: numberFromEnv('INFERENCE_QUEUE_SIZE', 16, { min: 0, max: 1000 }),
+    inferenceQueueWaitMs: numberFromEnv('INFERENCE_QUEUE_WAIT_MS', 10000, { min: 100, max: 120000 }),
     metricsRetentionDays: numberFromEnv('METRICS_RETENTION_DAYS', 30, { min: 1, max: 3650 })
   };
 }

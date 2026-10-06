@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { DatabaseSync } from 'node:sqlite';
+import { clearProviderModelsCache } from './providers.js';
 
 export function hashToken(token) {
   return crypto.createHash('sha256').update(token).digest('hex');
@@ -95,9 +96,19 @@ export class SqliteStore {
         latency_ms REAL NOT NULL DEFAULT 0,
         data_json TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS security_events (
+        id TEXT PRIMARY KEY,
+        at TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        route TEXT NOT NULL,
+        identity TEXT,
+        address_fingerprint TEXT,
+        retry_after_seconds INTEGER NOT NULL
+      );
       CREATE INDEX IF NOT EXISTS idx_metrics_at ON metrics(at);
       CREATE INDEX IF NOT EXISTS idx_metrics_key_at ON metrics(key_id, at);
       CREATE INDEX IF NOT EXISTS idx_metrics_cache_at ON metrics(cache_status, at);
+      CREATE INDEX IF NOT EXISTS idx_security_events_at ON security_events(at);
     `);
     const accessKeyColumns = new Set(this.db.prepare('PRAGMA table_info(access_keys)').all().map((column) => column.name));
     if (!accessKeyColumns.has('paused_at')) this.db.exec('ALTER TABLE access_keys ADD COLUMN paused_at TEXT');
@@ -170,6 +181,15 @@ export class SqliteStore {
     this.statements.metricUpdate = this.db.prepare(`
       UPDATE metrics SET cache_status = ?, input_tokens = ?, output_tokens = ?, latency_ms = ?, data_json = ? WHERE id = ?
     `);
+    this.statements.securityEventInsert = this.db.prepare(`
+      INSERT INTO security_events (id, at, event_type, route, identity, address_fingerprint, retry_after_seconds)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+    this.statements.securityEventsList = this.db.prepare(`
+      SELECT id, at, event_type AS type, route, identity, address_fingerprint AS addressFingerprint, retry_after_seconds AS retryAfterSeconds
+      FROM security_events ORDER BY at DESC LIMIT ?
+    `);
+    this.statements.securityEventsPrune = this.db.prepare('DELETE FROM security_events WHERE at < ?');
   }
 
   async migrateLegacyJson() {
@@ -270,6 +290,7 @@ export class SqliteStore {
   }
 
   async updateSettings(patch) {
+    clearProviderModelsCache();
     const settings = { ...this.getSettings(), ...structuredClone(patch) };
     this.statements.settingsSet.run(JSON.stringify(settings));
     return this.getSettings();
@@ -401,6 +422,60 @@ export class SqliteStore {
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
     const rows = this.db.prepare(`SELECT data_json FROM metrics ${where} ORDER BY at DESC LIMIT ?`).all(...params, safeLimit);
     return rows.reverse().map((row) => JSON.parse(row.data_json));
+  }
+
+  getMetricsSummary({ from, to, keyId, model, bucket = 'hour' }, keys) {
+    const conditions = ['at >= ?', 'at <= ?'];
+    const params = [from, to];
+    if (keyId) { conditions.push('key_id = ?'); params.push(keyId); }
+    if (model) { conditions.push("json_extract(data_json, '$.model') = ?"); params.push(model); }
+    const base = `WITH selected AS (SELECT *,
+      json_extract(data_json, '$.lmCachedInputTokens') AS cached,
+      json_extract(data_json, '$.tokensPerSecond') AS rate,
+      json_extract(data_json, '$.generationDurationMs') AS duration,
+      json_extract(data_json, '$.throughputSource') AS source,
+      json_extract(data_json, '$.telemetryVersion') AS version
+      FROM metrics WHERE ${conditions.join(' AND ')}), enriched AS (SELECT *,
+      CASE WHEN (source = 'upstream' OR version >= 2) AND rate > 0 AND output_tokens > 0 THEN 1 ELSE 0 END AS measured
+      FROM selected)`;
+    const fields = `COUNT(*) AS requests, COALESCE(SUM(input_tokens),0) AS inputTokens,
+      COALESCE(SUM(output_tokens),0) AS outputTokens, COALESCE(SUM(status >= 400),0) AS errors,
+      COALESCE(SUM(cached),0) AS lmCachedInputTokens,
+      COALESCE(SUM(CASE WHEN cached IS NOT NULL THEN input_tokens ELSE 0 END),0) AS lmReportedInputTokens,
+      COALESCE(SUM(CASE WHEN cached IS NOT NULL THEN MAX(0,input_tokens-cached) ELSE 0 END),0) AS lmUncachedInputTokens,
+      COUNT(cached) AS lmCacheReportedRequests`;
+    const totals = this.db.prepare(`${base} SELECT ${fields}, COALESCE(AVG(latency_ms),0) AS averageLatencyMs,
+      COALESCE(SUM(measured),0) AS throughputSamples,
+      COALESCE(SUM(CASE WHEN measured AND source = 'upstream' THEN 1 ELSE 0 END),0) AS throughputReportedRequests,
+      COALESCE(SUM(CASE WHEN measured AND source != 'upstream' THEN 1 ELSE 0 END),0) AS throughputEstimatedRequests,
+      SUM(CASE WHEN measured THEN output_tokens ELSE 0 END) AS rateTokens,
+      SUM(CASE WHEN measured THEN CASE WHEN duration > 0 THEN duration/1000.0 ELSE output_tokens/rate END ELSE 0 END) AS rateSeconds
+      FROM enriched`).get(...params);
+    totals.averageLatencyMs = Math.round(totals.averageLatencyMs);
+    totals.averageTokensPerSecond = totals.rateSeconds > 0 ? Math.round(totals.rateTokens / totals.rateSeconds * 10) / 10 : null;
+    totals.lmCacheHitRate = totals.lmReportedInputTokens ? totals.lmCachedInputTokens / totals.lmReportedInputTokens : null;
+    delete totals.rateTokens; delete totals.rateSeconds;
+    const keyMap = new Map(keys.map(key => [key.id, key]));
+    const byKey = this.db.prepare(`${base} SELECT key_id AS keyId, ${fields}, MAX(at) AS lastActivity FROM enriched GROUP BY key_id ORDER BY SUM(input_tokens+output_tokens) DESC`).all(...params).map(row => ({ ...row, name: keyMap.get(row.keyId)?.name || 'Clave eliminada', prefix: keyMap.get(row.keyId)?.prefix || '—' }));
+    const format = bucket === 'day' ? '%Y-%m-%dT00:00:00.000Z' : '%Y-%m-%dT%H:00:00.000Z';
+    const timeline = this.db.prepare(`${base} SELECT strftime('${format}',at) AS at, ${fields} FROM enriched GROUP BY 1 ORDER BY 1`).all(...params);
+    return { totals: { ...totals }, byKey, timeline };
+  }
+
+  recordSecurityEvent(event) {
+    const at = event.at || new Date().toISOString();
+    this.statements.securityEventInsert.run(
+      event.id || crypto.randomUUID(), at, event.type, event.route,
+      event.identity || null, event.addressFingerprint || null,
+      Math.max(1, Number(event.retryAfterSeconds) || 1)
+    );
+    const cutoff = new Date(Date.now() - this.retentionDays * 86400000).toISOString();
+    this.statements.securityEventsPrune.run(cutoff);
+  }
+
+  getSecurityEvents({ limit = 100 } = {}) {
+    const safeLimit = Math.min(500, Math.max(1, Number(limit) || 100));
+    return this.statements.securityEventsList.all(safeLimit);
   }
 
   // Modelos distintos usados en el periodo (no aplica el filtro de modelo,

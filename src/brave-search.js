@@ -74,7 +74,7 @@ export function formatBraveContext(payload) {
   };
 }
 
-export async function searchBrave({ endpoint, apiKey, query }) {
+export async function searchBrave({ endpoint, apiKey, query, signal }) {
   if (!apiKey) {
     const error = new Error('La búsqueda web no está configurada. Pide al administrador que añada la clave de Brave.');
     error.status = 503;
@@ -96,7 +96,7 @@ export async function searchBrave({ endpoint, apiKey, query }) {
         accept: 'application/json',
         'x-subscription-token': apiKey
       },
-      signal: AbortSignal.timeout(30_000)
+      signal: AbortSignal.any([AbortSignal.timeout(30_000), ...(signal ? [signal] : [])])
     });
   };
   let response;

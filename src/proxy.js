@@ -8,9 +8,10 @@ import { jsonBodyErrorHandler } from './http-errors.js';
 import { loadModelCapabilities, annotateModel } from './model-capabilities.js';
 import { fetchProviderModels, routeForModel } from './providers.js';
 import { extractOutputText, extractUpstreamTelemetry, extractUsage } from './usage.js';
+import { RateLimiter } from './rate-limit.js';
 
 const INFERENCE_PATHS = new Set(['/v1/chat/completions', '/v1/completions', '/v1/responses', '/v1/embeddings']);
-const DASHBOARD_PATHS = new Set(['/dashboard', '/keys', '/activity', '/settings', '/utilities', '/server', '/styles.css', '/app.js', '/favicon.ico']);
+const DASHBOARD_PATHS = new Set(['/dashboard', '/keys', '/activity', '/security', '/settings', '/utilities', '/server', '/styles.css', '/app.js', '/favicon.ico']);
 // Listing models is part of the interactive chat startup. External providers
 // must never turn an unavailable host into an eight-second UI stall.
 const EXTERNAL_MODELS_TIMEOUT_MS = 750;
@@ -142,13 +143,25 @@ function parseSseBuffer(buffer, onPayload) {
   return remainder;
 }
 
-export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, liveActivity }) {
+export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, liveActivity, rateLimiter: providedRateLimiter }) {
   const app = express();
   app.disable('x-powered-by');
+  if (config.trustCloudflareProxy) app.set('trust proxy', 1);
+  const rateLimiter = providedRateLimiter || new RateLimiter({ limit: config.rateLimitAuthPerMinute || 20 });
+  const logLimit = (event) => {
+    console.warn(`[seguridad] rate limit activado ${JSON.stringify(event)}`);
+    try { store.recordSecurityEvent?.(event); } catch (error) { console.error('No se pudo guardar el evento de seguridad:', error); }
+  };
   app.use(cors({ origin: true, credentials: false }));
+  app.use((req, _res, next) => {
+    req.rateLimitAddress = config.trustCloudflareProxy
+      ? (req.get('cf-connecting-ip') || req.ip || req.socket?.remoteAddress || 'unknown')
+      : (req.socket?.remoteAddress || 'unknown');
+    next();
+  });
 
   app.get('/', (_req, res) => res.redirect(302, '/chat'));
-  if (chatApp) app.use('/chat', chatApp);
+  if (chatApp) app.use('/chat', (req, _res, next) => { req.rateLimiter = rateLimiter; req.securityLog = logLimit; next(); }, chatApp);
   if (statusApp) app.use('/status', statusApp);
 
   // Publica la carcasa del panel bajo el mismo hostname del gateway. Los datos
@@ -169,7 +182,7 @@ export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, 
     try {
       const models = await fetchProviderModels(
         { baseUrl: settings.upstreamBaseUrl, apiKey: settings.upstreamApiKey },
-        { timeoutMs: Math.min(config.requestTimeoutMs, 5000) }
+        { timeoutMs: Math.min(config.requestTimeoutMs, 5000), cache: false }
       );
       return res.json({ status: 'ok', service: 'benzIA', upstream: settings.upstreamBaseUrl, models: models.length });
     } catch (error) {
@@ -195,9 +208,33 @@ export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, 
     const token = extractAccessToken(req);
     const accessKey = store.findKeyByToken(token, { includeInactive: true });
     if (!accessKey || accessKey.revokedAt) {
+      const ip = req.rateLimitAddress || 'unknown';
+      const result = rateLimiter.consume(`auth:${ip}`, {
+        type: 'auth_rate_limit', route: req.path, identity: null,
+        addressFingerprint: rateLimiter.addressFingerprint(req)
+      }, config.rateLimitAuthPerMinute || 20, false);
+      if (!result.allowed) {
+        const event = { type: 'auth_rate_limit', route: req.path, identity: null, addressFingerprint: rateLimiter.addressFingerprint(req), retryAfterSeconds: result.retryAfterSeconds };
+        if (rateLimiter.shouldLog(event)) logLimit(event);
+        res.set('Retry-After', String(result.retryAfterSeconds));
+        return res.status(429).json(safeError(429, 'Demasiados intentos de autenticación. Espera antes de volver a intentarlo.', 'rate_limited'));
+      }
       return res.status(401).json(safeError(401, 'Clave de acceso ausente, revocada o no válida.', 'invalid_api_key'));
     }
 
+    const inferred = req.method === 'POST' && INFERENCE_PATHS.has(req.path);
+    const ip = req.rateLimitAddress || 'unknown';
+    const limit = inferred ? (config.rateLimitInferencePerMinute || 20) : (config.rateLimitKeyPerMinute || 120);
+    const keyResult = rateLimiter.consume(`key:${accessKey.id}:${inferred ? 'inference' : 'general'}`, {
+      type: inferred ? 'inference_rate_limit' : 'key_rate_limit', route: req.path,
+      identity: accessKey.name, addressFingerprint: rateLimiter.addressFingerprint(req)
+    }, limit, false);
+    if (!keyResult.allowed) {
+      const event = { type: inferred ? 'inference_rate_limit' : 'key_rate_limit', route: req.path, identity: accessKey.name, addressFingerprint: rateLimiter.addressFingerprint(req), retryAfterSeconds: keyResult.retryAfterSeconds };
+      if (rateLimiter.shouldLog(event)) logLimit(event);
+      res.set('Retry-After', String(keyResult.retryAfterSeconds));
+      return res.status(429).json(safeError(429, 'Has superado el ritmo máximo de solicitudes. Espera antes de volver a intentarlo.', 'rate_limited'));
+    }
     const path = req.path;
     if (req.method === 'GET' && path === '/v1/user_stats') {
       const stats = store.getKeyStats(accessKey.id) || {};
@@ -210,9 +247,10 @@ export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, 
     if (accessKey.pausedAt && !path.startsWith('/v1/models')) {
       return res.status(403).json(safeError(403, accessKey.pausedMessage || PAUSED_TOKEN_MESSAGE, 'access_disabled'));
     }
-    const isQwen38_27b = /qwen38.*27b|qwen.*27b.*38/i.test(String(body?.model || '').replace(/[._\s-]/g, ''));
-    if (isInference && isQwen38_27b && body?.reasoning_effort !== undefined && !['low', 'medium', 'xhigh'].includes(body.reasoning_effort)) {
-      const error = safeError(400, 'reasoning_effort para Qwen 3.8 27B debe ser low, medium o xhigh.', 'invalid_parameter');
+    const normalizedModelId = String(body?.model || '').replace(/[._\s-]/g, '');
+    const supportsQwen38ReasoningEffort = /qwen38.*27b|qwen.*27b.*38|qwen38.*flashnext|qwen.*flash.*next.*38/i.test(normalizedModelId);
+    if (isInference && supportsQwen38ReasoningEffort && body?.reasoning_effort !== undefined && !['low', 'medium', 'xhigh'].includes(body.reasoning_effort)) {
+      const error = safeError(400, 'reasoning_effort para Qwen 3.8 debe ser low, medium o xhigh.', 'invalid_parameter');
       error.error.param = 'reasoning_effort';
       return res.status(400).json(error);
     }
@@ -305,10 +343,12 @@ export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, 
     res.once('close', onResponseClosed);
     const cleanupRequest = () => {
       clearUpstreamTimeout();
+      releaseInference();
       req.off('aborted', onRequestAborted);
       res.off('close', onResponseClosed);
     };
-    const failureStatus = () => timedOut ? 504 : clientDisconnected ? 499 : 502;
+    let admissionRejected = false;
+    const failureStatus = () => admissionRejected ? 429 : timedOut ? 504 : clientDisconnected ? 499 : 502;
     const trackLive = isInference && isStream;
     if (trackLive) {
       liveActivity?.begin({
@@ -322,7 +362,13 @@ export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, 
     }
 
     let upstream;
+    let releaseInference = () => {};
     try {
+      if (isInference && config.inferenceAdmission) {
+        clearUpstreamTimeout();
+        releaseInference = await config.inferenceAdmission.acquire(selectedProvider.baseUrl, controller.signal);
+        startUpstreamTimeout();
+      }
       const requestUpstream = (requestBody) => fetch(upstreamUrl, {
         method: req.method,
         headers: {
@@ -345,6 +391,7 @@ export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, 
       // Reintentar sin esa extensión conserva la compatibilidad; en ese caso
       // benzIA estima el uso si el upstream no lo publica de otra forma.
       if (upstream.status === 400 && path === '/v1/chat/completions' && upstreamBody?.stream_options?.include_usage) {
+        await upstream.body?.cancel();
         const compatibleBody = structuredClone(upstreamBody);
         delete compatibleBody.stream_options;
         timedOut = false;
@@ -358,6 +405,7 @@ export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, 
       // pauses until it finishes or the client disconnects.
       if (!isStream) startUpstreamTimeout();
     } catch (error) {
+      if (error.status === 429) { admissionRejected = true; res.set('Retry-After', '5'); }
       cleanupRequest();
       if (trackLive) liveActivity?.finish(requestId);
       const status = failureStatus();
@@ -410,7 +458,7 @@ export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, 
             if (fragment) {
               firstTokenAt ||= Date.now();
               outputText += fragment;
-              liveActivity?.update(requestId, outputText);
+              liveActivity?.update(requestId, outputText, fragment);
             }
           });
         }
@@ -420,7 +468,7 @@ export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, 
           if (fragment) {
             firstTokenAt ||= Date.now();
             outputText += fragment;
-            liveActivity?.update(requestId, outputText);
+            liveActivity?.update(requestId, outputText, fragment);
           }
         });
         res.end();
@@ -462,6 +510,7 @@ export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, 
     try {
       responseBuffer = Buffer.from(await upstream.arrayBuffer());
     } catch (error) {
+      if (error.status === 429) { admissionRejected = true; res.set('Retry-After', '5'); }
       cleanupRequest();
       const status = failureStatus();
       await recordMetricSafely(store, {

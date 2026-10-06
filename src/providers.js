@@ -35,7 +35,7 @@ export function publicExternalProviders(providers = []) {
   return providers.map(({ id, name, baseUrl, apiKey }) => ({ id, name, baseUrl, hasApiKey: Boolean(apiKey) }));
 }
 
-export async function fetchProviderModels(provider, { timeoutMs = 8000 } = {}) {
+async function requestProviderModels(provider, { timeoutMs = 8000 } = {}) {
   const response = await fetch(`${provider.baseUrl}/v1/models`, {
     headers: provider.apiKey ? { authorization: `Bearer ${provider.apiKey}` } : {},
     redirect: 'error',
@@ -55,3 +55,21 @@ export function routeForModel(model, providers = []) {
   const upstreamModel = model.slice(separator + 1);
   return upstreamModel ? { provider, upstreamModel } : null;
 }
+
+const modelCatalogues = new Map();
+export async function fetchProviderModels(provider, options = {}) {
+  if (options.cache === false) return requestProviderModels(provider, options);
+  const key = JSON.stringify([provider.baseUrl, provider.apiKey || '', options.timeoutMs || 8000]);
+  let entry = modelCatalogues.get(key);
+  if (entry && (entry.pending || entry.expiresAt > Date.now())) return structuredClone(await (entry.pending || entry.models));
+  entry = { expiresAt: 0 };
+  modelCatalogues.set(key, entry);
+  if (modelCatalogues.size > 100) modelCatalogues.delete(modelCatalogues.keys().next().value);
+  entry.pending = requestProviderModels(provider, options).then(models => {
+    entry.models = models;
+    entry.expiresAt = Date.now() + 15_000;
+    return models;
+  }).catch(error => { modelCatalogues.delete(key); throw error; }).finally(() => { entry.pending = null; });
+  return structuredClone(await entry.pending);
+}
+export function clearProviderModelsCache() { modelCatalogues.clear(); }

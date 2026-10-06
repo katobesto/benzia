@@ -22,8 +22,16 @@ test('Qwen 3.8 27B muestra el esfuerzo y lo envía en ambos protocolos', () => {
   assert.match(html, /value="low"/);
   assert.match(html, /value="medium"/);
   assert.match(html, /value="xhigh"/);
-  assert.match(client, /function isQwen38_27b/);
+  assert.match(client, /function supportsQwen38ReasoningEffort/);
   assert.match(client, /reasoning_effort: reasoningEffort/);
   assert.match(styles, /\.reasoning-effort-control/);
   assert.match(styles, /\.reasoning-effort-control select option \{ background: #242424; color: #f2f2f2;/);
+});
+
+test('benzIA Chat muestra el total estimado de contexto, pensamiento y respuesta', () => {
+  assert.match(client, /generatedTokenEstimate/);
+  assert.match(client, /inputEstimate \+ generatedEstimate/);
+  assert.match(client, /totalTokens: inputTokens \+ outputTokens/);
+  assert.match(client, /reasoningTokensEstimated/);
+  assert.match(client, /statChip\('total'/);
 });

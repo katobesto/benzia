@@ -6,11 +6,12 @@ import express from 'express';
 import helmet from 'helmet';
 import multer from 'multer';
 
-import { accessAuth } from './access-auth.js';
+import { extractAccessToken } from './access-auth.js';
 import { searchBrave, validateSearchQuery } from './brave-search.js';
 import { DOCUMENT_MAX_BYTES, documentKind, extractDocument } from './document-extractor.js';
 import { jsonBodyErrorHandler } from './http-errors.js';
 import { runResearch } from './research.js';
+import { RateLimiter } from './rate-limit.js';
 
 const chatPublicDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../chat-public');
 const vendorDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../node_modules');
@@ -40,7 +41,7 @@ const PREVIEW_FRAME_CSP = [
   "form-action 'none'"
 ].join('; ');
 
-export function createChatApp({ config, store }) {
+export function createChatApp({ config, store, rateLimiter: configuredRateLimiter }) {
   const app = express();
   app.disable('x-powered-by');
   app.use(helmet({
@@ -54,7 +55,48 @@ export function createChatApp({ config, store }) {
     }
   }));
 
-  const auth = accessAuth(store);
+  const rateLimiter = configuredRateLimiter || new RateLimiter({ limit: config.rateLimitAuthPerMinute || 20 });
+  const auth = (req, res, next) => {
+    const token = extractAccessToken(req);
+    const key = store.findKeyByToken(token, { includeInactive: true });
+    if (!key || key.revokedAt) {
+      const ip = req.rateLimitAddress || req.socket?.remoteAddress || 'unknown';
+      const result = rateLimiter.consume(`auth:${ip}`, { type: 'auth_rate_limit', route: req.path, identity: null, addressFingerprint: rateLimiter.addressFingerprint(req) }, config.rateLimitAuthPerMinute || 20, false);
+      if (!result.allowed) {
+        const event = { type: 'auth_rate_limit', route: req.path, identity: null, addressFingerprint: rateLimiter.addressFingerprint(req), retryAfterSeconds: result.retryAfterSeconds };
+        if (!rateLimiter.shouldLog(event)) return res.set('Retry-After', String(result.retryAfterSeconds)).status(429).json({ error: 'Demasiados intentos de autenticación. Espera antes de volver a intentarlo.', code: 'rate_limited' });
+        if (req.securityLog) req.securityLog(event);
+        else {
+          console.warn(`[seguridad] rate limit activado ${JSON.stringify(event)}`);
+          try { store.recordSecurityEvent?.(event); } catch (error) { console.error('No se pudo guardar el evento de seguridad:', error); }
+        }
+        return res.set('Retry-After', String(result.retryAfterSeconds)).status(429).json({ error: 'Demasiados intentos de autenticación. Espera antes de volver a intentarlo.', code: 'rate_limited' });
+      }
+    }
+    if (!key || key.revokedAt) return res.status(401).json({ error: { message: 'Clave de acceso ausente, revocada o no válida.', type: 'invalid_api_key', code: 'invalid_api_key', param: null } });
+    req.accessKey = key;
+    return next();
+  };
+  const applyRateLimit = (req, res, kind) => {
+    const key = `key:${req.accessKey.id}:${kind}`;
+    const limit = kind === 'inference' ? (config.rateLimitInferencePerMinute || 20) : (config.rateLimitKeyPerMinute || 120);
+    const result = rateLimiter.consume(key, { type: `${kind}_rate_limit`, route: req.path, identity: req.accessKey.name, addressFingerprint: rateLimiter.addressFingerprint(req) }, limit, false);
+    if (result.allowed) return true;
+    const event = { type: `${kind}_rate_limit`, route: req.path, identity: req.accessKey.name, addressFingerprint: rateLimiter.addressFingerprint(req), retryAfterSeconds: result.retryAfterSeconds };
+    if (!rateLimiter.shouldLog(event)) {
+      res.set('Retry-After', String(result.retryAfterSeconds)).status(429).json({ error: 'Has superado el ritmo máximo de solicitudes. Espera antes de volver a intentarlo.', code: 'rate_limited' });
+      return false;
+    }
+    if (req.securityLog) req.securityLog(event);
+    else {
+      console.warn(`[seguridad] rate limit activado ${JSON.stringify(event)}`);
+      try { store.recordSecurityEvent?.(event); } catch (error) { console.error('No se pudo guardar el evento de seguridad:', error); }
+    }
+    res.set('Retry-After', String(result.retryAfterSeconds)).status(429).json({ error: 'Has superado el ritmo máximo de solicitudes. Espera antes de volver a intentarlo.', code: 'rate_limited' });
+    return false;
+  };
+  const keyRateLimit = (req, res, next) => applyRateLimit(req, res, 'general') ? next() : undefined;
+  const inferenceRateLimit = (req, res, next) => applyRateLimit(req, res, 'inference') ? next() : undefined;
   app.use(express.json({ limit: '16kb' }));
   const braveSettings = () => {
     const settings = store.getSettings();
@@ -111,7 +153,7 @@ export function createChatApp({ config, store }) {
     });
   });
 
-  app.post('/api/web-search', auth, async (req, res) => {
+  app.post('/api/web-search', auth, keyRateLimit, async (req, res) => {
     let query;
     try {
       query = validateSearchQuery(req.body?.query);
@@ -127,9 +169,12 @@ export function createChatApp({ config, store }) {
     }
   });
 
-  app.post('/api/research/stream', auth, async (req, res) => {
+  app.post('/api/research/stream', auth, inferenceRateLimit, async (req, res) => {
     const model = typeof req.body?.model === 'string' ? req.body.model.trim().slice(0, 200) : '';
     if (!model || !Array.isArray(req.body?.messages)) return res.status(400).json({ error: 'Modelo o conversación de investigación no válidos.' });
+    const controller = new AbortController();
+    const cancel = () => controller.abort();
+    res.once('close', cancel);
     res.status(200).set({
       'content-type': 'text/event-stream; charset=utf-8',
       'cache-control': 'no-cache, no-transform',
@@ -146,14 +191,16 @@ export function createChatApp({ config, store }) {
       return res.end();
     }
     try {
-      await runResearch({ config, store, accessKey: req.accessKey, model, messages: req.body.messages, emit });
+      await runResearch({ config, store, accessKey: req.accessKey, model, messages: req.body.messages, emit, signal: controller.signal });
     } catch (error) {
-      emit('research.error', { message: error.message || 'No se pudo completar la investigación web.' });
+      if (!controller.signal.aborted) emit('research.error', { message: error.message || 'No se pudo completar la investigación web.' });
+    } finally {
+      res.off('close', cancel);
     }
     return res.end();
   });
 
-  app.post('/api/attachments/extract', auth, (req, res) => {
+  app.post('/api/attachments/extract', auth, keyRateLimit, (req, res) => {
     upload.single('file')(req, res, async (uploadError) => {
       if (uploadError instanceof multer.MulterError && uploadError.code === 'LIMIT_FILE_SIZE') {
         return res.status(413).json({ error: 'El documento supera el límite de 6 MB.' });
@@ -174,7 +221,7 @@ export function createChatApp({ config, store }) {
     });
   });
 
-  app.post('/api/preview', auth, express.text({ limit: '1.2mb', type: 'text/*' }), (req, res) => {
+  app.post('/api/preview', auth, keyRateLimit, express.text({ limit: '1.2mb', type: 'text/*' }), (req, res) => {
     const html = typeof req.body === 'string' ? req.body : '';
     if (!html.trim()) return res.status(400).json({ error: 'No hay contenido que previsualizar.' });
     if (Buffer.byteLength(html, 'utf8') > PREVIEW_MAX_BYTES) {

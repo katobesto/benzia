@@ -6,8 +6,9 @@ export const MAX_CAPABILITIES = 200;
 const MODALITIES = new Set(['text', 'image']);
 const QWEN38_REASONING_EFFORTS = ['low', 'medium', 'xhigh'];
 
-function hasQwen38_27bReasoning(modelId) {
-  return /qwen38.*27b|qwen.*27b.*38/i.test(String(modelId || '').replace(/[._\s-]/g, ''));
+function hasQwen38Reasoning(modelId) {
+  const normalized = String(modelId || '').replace(/[._\s-]/g, '');
+  return /qwen38.*27b|qwen.*27b.*38|qwen38.*flashnext|qwen.*flash.*next.*38/i.test(normalized);
 }
 
 /**
@@ -91,7 +92,9 @@ export async function loadModelCapabilities(dataDir) {
     return {};
   }
   try {
-    return sanitizeModelCapabilities(JSON.parse(raw));
+    // UTF-8 BOM is valid in many editors but JSON.parse rejects it. Ignore it
+    // at the boundary so manually saved files work just like API-written ones.
+    return sanitizeModelCapabilities(JSON.parse(raw.replace(/^\uFEFF/, '')));
   } catch (error) {
     console.error(`${CAPABILITIES_FILENAME} no es válido; se ignoran las capacidades declaradas:`, error.message);
     return {};
@@ -106,7 +109,7 @@ export async function loadModelCapabilities(dataDir) {
  */
 export function annotateModel(model, capabilities = {}) {
   if (!model || typeof model !== 'object' || typeof model.id !== 'string') return model;
-  const qwenReasoning = hasQwen38_27bReasoning(model.id);
+  const qwenReasoning = hasQwen38Reasoning(model.id);
   let declared = capabilities[model.id];
   if (!declared && model.benzIA_provider && typeof model.benzIA_provider.id === 'string') {
     const prefix = `${model.benzIA_provider.id}/`;
