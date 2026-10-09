@@ -13,7 +13,7 @@ test('Codex admin endpoints expose device code and keep credentials out of setti
   const notifications = new Set();
   const codex = {
     homeDir: '',
-    readAccount: async () => ({ requiresOpenaiAuth: !authorized }),
+    readAccount: async () => ({ account: authorized ? { type: 'chatgpt' } : null, requiresOpenaiAuth: true }),
     startDeviceLogin: async () => ({ type: 'chatgptDeviceCode', loginId: 'login-1', verificationUrl: 'https://auth.openai.com/codex/device', userCode: 'ABCD-1234' }),
     on: (_event, handler) => { notifications.add(handler); return () => notifications.delete(handler); },
     listModels: async () => [{ id: 'gpt-codex-a', name: 'Codex A' }],

@@ -106,7 +106,7 @@ export function createAdminApp({ config, store, liveActivity }) {
       }
       try {
         const account = await codex.readAccount();
-        if (account.requiresOpenaiAuth) throw new Error('not authorized');
+        if (account.account?.type !== 'chatgpt') throw new Error('not authorized');
         const settings = store.getSettings();
         await store.updateSettings({ codexOpenAI: { ...(settings.codexOpenAI || {}), connected: true } });
         entry.status = 'authorized';
@@ -366,7 +366,7 @@ export function createAdminApp({ config, store, liveActivity }) {
       res.locals.codexTrace('account/read:start');
       const account = await codex.readAccount();
       res.locals.codexTrace('account/read:done');
-      if (!account.requiresOpenaiAuth) return res.status(409).json({ error: 'Ya hay una cuenta Codex autorizada.' });
+      if (account.account?.type === 'chatgpt') return res.status(409).json({ error: 'Ya hay una cuenta Codex autorizada.' });
       const earlyCompletions = [];
       const offEarly = codex.on('notification', (message) => {
         if (message.method === 'account/login/completed') earlyCompletions.push(message);
@@ -402,7 +402,7 @@ export function createAdminApp({ config, store, liveActivity }) {
   app.post('/admin/api/codex/models', auth, async (_req, res) => {
     try {
       const account = await config.codexAppServer.readAccount();
-      if (account.requiresOpenaiAuth) return res.status(409).json({ error: 'Autoriza la cuenta Codex antes de consultar modelos.' });
+      if (account.account?.type !== 'chatgpt') return res.status(409).json({ error: 'Autoriza la cuenta Codex antes de consultar modelos.' });
       const models = await config.codexAppServer.listModels();
       const current = store.getSettings().codexOpenAI || {};
       await store.updateSettings({ codexOpenAI: { ...current, connected: true, models } });
