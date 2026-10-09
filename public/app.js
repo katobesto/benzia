@@ -1,3 +1,5 @@
+import { parseApiResponse } from './api-client.js';
+
 const routes = {
   '/': 'dashboard',
   '/dashboard': 'dashboard',
@@ -63,10 +65,7 @@ async function api(path, options = {}) {
     showAuth();
     throw new Error(STATUS_MODE ? 'El token de acceso no es válido.' : 'El token administrativo no es válido.');
   }
-  if (response.status === 204) return null;
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.error || `Error ${response.status}`);
-  return payload;
+  return parseApiResponse(response);
 }
 
 function showAuth() {
@@ -996,9 +995,8 @@ $('#codex-login').addEventListener('click', async () => {
     clearInterval(codexLoginTimer);
     codexLoginTimer = setInterval(async () => {
       try {
-        const response = await fetch(`/admin/api/codex/login/${encodeURIComponent(login.loginId)}`, { credentials: 'same-origin', headers: { 'x-admin-token': state.token } });
-        if (response.status === 202) return;
-        const payload = await response.json(); if (!response.ok) throw new Error(payload.error || 'No se completó la autorización.');
+        const payload = await api(`/admin/api/codex/login/${encodeURIComponent(login.loginId)}`);
+        if (payload.pending) return;
         clearInterval(codexLoginTimer); codexLoginTimer = null; activeCodexLoginId = ''; box.classList.add('hidden');
         state.settings.codexOpenAI = { ...(state.settings.codexOpenAI || {}), connected: true }; renderCodexSettings();
         message.textContent = 'Cuenta autorizada. Cargando modelos…'; await loadCodexModels();
