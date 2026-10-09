@@ -246,6 +246,10 @@ export function createChatApp({ config, store, rateLimiter: configuredRateLimite
     return res.send(doc.html);
   });
 
+  app.use((req, res, next) => {
+    if (req.path.endsWith('.js')) res.set('cache-control', 'no-store');
+    next();
+  });
   app.get('/vendor/marked.umd.js', (_req, res) => res.sendFile(path.join(vendorDir, 'marked/lib/marked.umd.js')));
   app.get('/vendor/purify.min.js', (_req, res) => res.sendFile(path.join(vendorDir, 'dompurify/dist/purify.min.js')));
   app.use(express.static(chatPublicDir, { index: false, fallthrough: true }));

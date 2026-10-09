@@ -25,13 +25,17 @@ test('sirve la interfaz de chat sin exponer su configuración', async (t) => {
   const page = await fetch(`${baseUrl}/`);
   assert.equal(page.status, 200);
   assert.equal(page.headers.get('cache-control'), 'no-store');
-  assert.match(await page.text(), /benzIA Chat/);
+  const html = await page.text();
+  assert.match(html, /benzIA Chat/);
+  assert.match(html, /<script src="\/chat\/chat\.js\?v=12"/);
+  assert.deepEqual([...html.matchAll(/<script\s+src="([^"]+\.js(?:\?[^"]*)?)"/g)].map((match) => match[1].includes('?v=12')), [true, true, true, true]);
 
   const stylesheet = await fetch(`${baseUrl}/chat.css`);
   assert.equal(stylesheet.status, 200);
 
   const chatClient = await fetch(`${baseUrl}/chat.js`);
   assert.equal(chatClient.status, 200);
+  assert.match(chatClient.headers.get('cache-control') || '', /no-store/);
   const chatSource = await chatClient.text();
   assert.match(chatSource, /endpoint}\/responses/);
   assert.match(chatSource, /endpoint}\/chat\/completions/);

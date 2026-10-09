@@ -9,11 +9,14 @@ test('dashboard module imports the API helper with a versioned URL and serves it
   await new Promise(resolve => server.once('listening', resolve));
   t.after(() => new Promise(resolve => server.close(resolve)));
   const base = `http://127.0.0.1:${server.address().port}`;
+  const page = await fetch(`${base}/dashboard`);
+  assert.match(await page.text(), /<script src="\/app\.js\?v=12"/);
   const script = await fetch(`${base}/app.js`);
   assert.equal(script.status, 200);
   const source = await script.text();
   const match = source.match(/from '\.\/api-client\.js\?v=(\d+)'/);
   assert.ok(match, 'el módulo auxiliar debe cambiar de URL entre versiones para evitar caché antigua');
+  assert.equal(match[1], '12');
   const helper = await fetch(`${base}/api-client.js?v=${match[1]}`);
   assert.equal(helper.status, 200);
   assert.match(await helper.text(), /export function providerFilterOptions/);
