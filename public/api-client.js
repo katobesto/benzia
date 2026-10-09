@@ -1,3 +1,12 @@
+export function providerFilterOptions(settings) {
+  const providers = Array.isArray(settings?.externalProviders) ? settings.externalProviders : [];
+  const codex = settings?.codexOpenAI;
+  if (codex?.connected && codex.selectedModel && !providers.some((provider) => provider.id === 'openai')) {
+    return [...providers, { id: 'openai', name: 'OpenAI Codex', baseUrl: 'codex://app-server' }];
+  }
+  return providers;
+}
+
 export async function parseApiResponse(response) {
   if (response.status === 204) return null;
   const contentType = response.headers.get('content-type') || 'content-type no informado';

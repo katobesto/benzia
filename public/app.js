@@ -1,4 +1,4 @@
-import { parseApiResponse } from './api-client.js';
+import { parseApiResponse, providerFilterOptions } from './api-client.js';
 
 const routes = {
   '/': 'dashboard',
@@ -764,7 +764,7 @@ function providerHost(baseUrl) {
 }
 
 function renderProviderFilterList() {
-  const providers = state.settings?.externalProviders || [];
+  const providers = providerFilterOptions(state.settings);
   const list = $('#provider-filter-list');
   if (!providers.length) {
     list.innerHTML = '<div class="empty-state">No hay proveedores externos configurados. Añádelos en Configuración.</div>';
@@ -780,9 +780,9 @@ function renderProviderFilterList() {
 function openProviderFilter(keyId) {
   const key = state.keys.find((item) => item.id === keyId);
   if (!key || key.revokedAt || !key.allowExternalProviders) return;
-  const providers = state.settings?.externalProviders || [];
+  const providers = providerFilterOptions(state.settings);
   const available = new Set(providers.map((provider) => provider.id));
-  const base = key.externalProviderIds === null ? new Set(providers.map((provider) => provider.id)) : new Set(key.externalProviderIds);
+  const base = key.externalProviderIds === null ? new Set(available) : new Set(key.externalProviderIds);
   providerFilterSelection = new Set([...base].filter((id) => available.has(id)));
   $('#provider-filter-key-name').textContent = `Proveedores de ${key.name}`;
   renderProviderFilterList();
@@ -799,7 +799,7 @@ function saveProviderFilter(event) {
   message.textContent = 'Guardando selección…';
   message.classList.remove('error');
   const selected = $$('#provider-filter-list input[type="checkbox"]:checked').map((input) => input.dataset.providerId);
-  const all = (state.settings?.externalProviders || []).map((provider) => provider.id);
+  const all = providerFilterOptions(state.settings).map((provider) => provider.id);
   api(`/admin/api/keys/${encodeURIComponent(form.dataset.keyId)}/providers`, {
     method: 'PATCH',
     body: JSON.stringify({ providerIds: all.length && selected.length === all.length ? null : selected })

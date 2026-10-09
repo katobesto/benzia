@@ -271,7 +271,7 @@ export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, 
       const providers = accessKey.allowExternalProviders
         ? settings.externalProviders.filter((provider) => accessKey.externalProviderIds == null || accessKey.externalProviderIds.includes(provider.id))
         : [];
-      const codexModels = accessKey.allowExternalProviders
+      const codexModels = accessKey.allowExternalProviders && (accessKey.externalProviderIds == null || accessKey.externalProviderIds.includes('openai'))
         ? normalizeCodexModels(settings.codexOpenAI.models || [], settings.codexOpenAI.selectedModel)
         : [];
       const results = await Promise.allSettled([

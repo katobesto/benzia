@@ -1,6 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseApiResponse } from '../public/api-client.js';
+import { parseApiResponse, providerFilterOptions } from '../public/api-client.js';
+
+test('provider filter includes published Codex and retains the openai grant', () => {
+  const settings = { externalProviders: [{ id: 'cloud', name: 'Cloud IA', baseUrl: 'https://example.com' }], codexOpenAI: { connected: true, selectedModel: 'codex-model' } };
+  assert.deepEqual(providerFilterOptions(settings).map(({ id }) => id), ['cloud', 'openai']);
+  assert.deepEqual(providerFilterOptions({ ...settings, codexOpenAI: { connected: false, selectedModel: '' } }).map(({ id }) => id), ['cloud']);
+  assert.deepEqual(providerFilterOptions({ ...settings, externalProviders: [{ id: 'openai', name: 'OpenAI API' }] }).map(({ id }) => id), ['openai']);
+});
+
 
 test('non-JSON API responses report status and content type rather than a parser exception', async () => {
   const response = new Response('<!DOCTYPE html><html></html>', {
