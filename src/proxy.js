@@ -12,7 +12,7 @@ import { extractOutputText, extractUpstreamTelemetry, extractUsage } from './usa
 import { RateLimiter } from './rate-limit.js';
 
 const INFERENCE_PATHS = new Set(['/v1/chat/completions', '/v1/completions', '/v1/responses', '/v1/embeddings']);
-const DASHBOARD_PATHS = new Set(['/dashboard', '/keys', '/activity', '/security', '/settings', '/utilities', '/server', '/styles.css', '/app.js', '/favicon.ico']);
+const DASHBOARD_PATHS = new Set(['/dashboard', '/keys', '/activity', '/security', '/settings', '/utilities', '/server', '/styles.css', '/app.js', '/api-client.js', '/favicon.ico']);
 // Listing models is part of the interactive chat startup. External providers
 // must never turn an unavailable host into an eight-second UI stall.
 const EXTERNAL_MODELS_TIMEOUT_MS = 750;

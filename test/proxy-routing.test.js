@@ -48,6 +48,7 @@ test('publica el dashboard antes de autenticar las rutas de inferencia', async (
   const adminApp = express();
   adminApp.get('/dashboard', (_req, res) => res.type('html').send('<h1>Dashboard</h1>'));
   adminApp.get('/utilities', (_req, res) => res.type('html').send('<h1>Utilidades</h1>'));
+  adminApp.get('/api-client.js', (_req, res) => res.type('application/javascript').send('export function parseApiResponse() {}'));
   adminApp.get('/admin/api/session', adminAuth('admin-secret'), (_req, res) => res.json({ ok: true }));
   const chatApp = express();
   chatApp.get('/', (_req, res) => res.type('html').send('<h1>benzIA Chat</h1>'));
@@ -80,6 +81,11 @@ test('publica el dashboard antes de autenticar las rutas de inferencia', async (
   assert.equal(dashboard.status, 200);
   assert.equal(dashboard.headers.get('www-authenticate'), null);
   assert.match(await dashboard.text(), /Dashboard/);
+
+  const apiClient = await fetch(`http://127.0.0.1:${address.port}/api-client.js`);
+  assert.equal(apiClient.status, 200);
+  assert.match(apiClient.headers.get('content-type'), /javascript/);
+  assert.match(await apiClient.text(), /parseApiResponse/);
 
   const utilities = await fetch(`http://127.0.0.1:${address.port}/utilities`);
   assert.equal(utilities.status, 200);
