@@ -9,6 +9,7 @@ import express from 'express';
 import { PAUSED_TOKEN_MESSAGE } from '../src/access-auth.js';
 import { adminAuth } from '../src/admin-auth.js';
 import { createGatewayApp } from '../src/proxy.js';
+import { InferenceAdmission } from '../src/inference-admission.js';
 import { SqliteStore } from '../src/store.js';
 
 test('health comprueba realmente la disponibilidad del proveedor local', async (t) => {
@@ -710,4 +711,52 @@ test('Codex chat streaming forwards each delta before the turn completes', async
   assert.equal(unsupported.status, 400);
   assert.equal((await unsupported.json()).error.type, 'unsupported_endpoint');
   assert.equal(codexCalls, 1);
+});
+
+test('Codex turn holds its inference slot until the turn completes', async (t) => {
+  let releaseFirstTurn;
+  let turnStarts = 0;
+  const codexAppServer = {
+    async generate(_body, { onDelta }) {
+      turnStarts += 1;
+      const thisTurn = turnStarts;
+      if (thisTurn === 1) {
+        await onDelta('working');
+        await new Promise((resolve) => { releaseFirstTurn = resolve; });
+      }
+      return { completion: Promise.resolve(`answer-${thisTurn}`) };
+    }
+  };
+  const settings = { codexOpenAI: { connected: true, selectedModel: 'model', models: [{ id: 'model', name: 'Model' }] } };
+  const store = {
+    getSettings: () => settings,
+    findKeyByToken: () => ({ id: 'key', allowExternalProviders: true }),
+    recordMetric: async () => {}
+  };
+  const gateway = createGatewayApp({ config: {
+    upstreamBaseUrl: 'http://127.0.0.1:1', upstreamApiKey: '', requestTimeoutMs: 5000, codexAppServer,
+    inferenceAdmission: new InferenceAdmission({ limit: 1, maxQueue: 2, waitMs: 3000 })
+  }, store });
+  const server = gateway.listen(0, '127.0.0.1');
+  await new Promise((resolve) => server.once('listening', resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const url = `http://127.0.0.1:${server.address().port}/v1/chat/completions`;
+  const send = () => fetch(url, {
+    method: 'POST', headers: { authorization: 'Bearer key', 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'openai/model', stream: true, messages: [{ role: 'user', content: 'hello' }] })
+  });
+  const first = await send();
+  const firstReader = first.body.getReader();
+  assert.match(new TextDecoder().decode((await firstReader.read()).value), /working/);
+  const secondPromise = send();
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.equal(turnStarts, 1);
+  releaseFirstTurn();
+  const second = await secondPromise;
+  assert.equal(turnStarts, 2);
+  const firstTail = await new Response(new ReadableStream({
+    async pull(controller) { const next = await firstReader.read(); next.done ? controller.close() : controller.enqueue(next.value); }
+  })).text();
+  assert.ok(firstTail.includes('[DONE]'));
+  assert.ok((await second.text()).includes('answer-2'));
 });

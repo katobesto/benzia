@@ -69,6 +69,26 @@ test('client cancellation interrupts the active Codex turn', async () => {
   assert.ok(calls.some(({ method, params }) => method === 'turn/interrupt' && params.threadId === 'thread-cancel' && params.turnId === 'turn-cancel'));
 });
 
+test('late turn/start response is interrupted when the client already disconnected', async () => {
+  const calls = [];
+  let resolveTurnStart;
+  const codex = new CodexAppServer({ request: async (method, params) => {
+    calls.push({ method, params });
+    if (method === 'thread/start') return { thread: { id: 'thread-late-cancel' } };
+    if (method === 'turn/start') return new Promise((resolve) => { resolveTurnStart = resolve; });
+    return {};
+  } });
+  const controller = new AbortController();
+  const generation = codex.generate({ model: 'openai/model', messages: [{ role: 'user', content: 'cancel while starting' }] }, { signal: controller.signal });
+  while (!resolveTurnStart) await new Promise((resolve) => setImmediate(resolve));
+  controller.abort(new Error('client disconnected during turn/start'));
+  resolveTurnStart({ turn: { id: 'turn-late-cancel' } });
+  const result = await generation;
+  await assert.rejects(result.completion, (error) => error.message === 'client disconnected during turn/start');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(calls.some(({ method, params }) => method === 'turn/interrupt' && params.threadId === 'thread-late-cancel' && params.turnId === 'turn-late-cancel'));
+});
+
 test('OpenAI chat request becomes a read-only Codex turn and returns generated text', async () => {
   const calls = [];
   const codex = new CodexAppServer({ request: async (method, params) => {
