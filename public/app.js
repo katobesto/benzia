@@ -1,4 +1,4 @@
-import { parseApiResponse, providerFilterOptions } from './api-client.js';
+import { parseApiResponse, providerFilterOptions } from './api-client.js?v=11';
 
 const routes = {
   '/': 'dashboard',

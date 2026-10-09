@@ -79,7 +79,9 @@ export function createAdminApp({ config, store, liveActivity }) {
   app.disable('x-powered-by');
   app.use(helmet({ contentSecurityPolicy: { directives: { 'script-src': ["'self'"], 'style-src': ["'self'"], 'img-src': ["'self'", 'data:'] } } }));
   app.use(express.json({ limit: '1mb' }));
-  app.use(express.static(publicDir, { extensions: ['html'], index: false }));
+  app.use(express.static(publicDir, { extensions: ['html'], index: false, setHeaders: (res, filePath) => {
+    if (filePath.endsWith('.js')) res.setHeader('Cache-Control', 'no-store');
+  } }));
 
   const auth = adminAuth(config.adminToken);
   app.use('/admin/api/codex', auth, (req, res, next) => {
