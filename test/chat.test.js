@@ -72,7 +72,7 @@ test('sirve la interfaz de chat sin exponer su configuración', async (t) => {
   const paused = await fetch(`${baseUrl}/api/config`, { headers: { authorization: 'Bearer paused-user-token' } });
   assert.equal(paused.status, 200);
   assert.deepEqual(await paused.json(), {
-    endpoint: 'https://gateway.example.test/v1',
+    endpoint: '/v1',
     identity: { id: 'key-2', name: 'Equipo pausado' },
     webSearchAvailable: false,
     paused: true
@@ -81,7 +81,7 @@ test('sirve la interfaz de chat sin exponer su configuración', async (t) => {
   const allowed = await fetch(`${baseUrl}/api/config`, { headers: { authorization: 'Bearer valid-user-token' } });
   assert.equal(allowed.status, 200);
   assert.deepEqual(await allowed.json(), {
-    endpoint: 'https://gateway.example.test/v1',
+    endpoint: '/v1',
     identity: { id: 'key-1', name: 'Equipo QA' },
     webSearchAvailable: false,
     paused: false

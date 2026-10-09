@@ -143,10 +143,8 @@ export function createChatApp({ config, store, rateLimiter: configuredRateLimite
     return doc && doc.expiresAt > Date.now() ? doc : null;
   };
   app.get('/api/config', auth, (req, res) => {
-    const settings = store.getSettings();
-    const gatewayBaseUrl = (settings.publicGatewayUrl || config.publicGatewayUrl).replace(/\/+$/, '');
     res.json({
-      endpoint: `${gatewayBaseUrl}/v1`,
+      endpoint: '/v1',
       identity: { id: req.accessKey.id, name: req.accessKey.name },
       webSearchAvailable: Boolean(braveSettings().apiKey),
       paused: Boolean(req.accessKey.pausedAt)

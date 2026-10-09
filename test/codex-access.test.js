@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createGatewayApp } from '../src/proxy.js';
+import { createChatApp } from '../src/chat.js';
 
 test('filtered token sees Codex only when openai is granted and cannot infer otherwise', async (t) => {
   const settings = { codexOpenAI: { connected: true, selectedModel: 'codex-model', models: [{ id: 'codex-model', name: 'Codex' }] } };
@@ -10,11 +11,17 @@ test('filtered token sees Codex only when openai is granted and cannot infer oth
       : token === 'allowed' ? { id: 'allowed', allowExternalProviders: true, externalProviderIds: ['openai'] } : null,
     recordMetric: async () => {}
   };
-  const gateway = createGatewayApp({ config: { upstreamBaseUrl: 'http://127.0.0.1:1', requestTimeoutMs: 1000 }, store });
+  const config = { upstreamBaseUrl: 'http://127.0.0.1:1', publicGatewayUrl: 'http://gateway.example.test', requestTimeoutMs: 1000 };
+  const chatApp = createChatApp({ config, store });
+  const gateway = createGatewayApp({ config, store, chatApp });
   const server = gateway.listen(0, '127.0.0.1');
   await new Promise(resolve => server.once('listening', resolve));
   t.after(() => new Promise(resolve => server.close(resolve)));
-  const base = `http://127.0.0.1:${server.address().port}/v1`;
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  const base = `${origin}/v1`;
+  const configResponse = await fetch(`${origin}/chat/api/config`, { headers: { authorization: 'Bearer allowed', 'x-forwarded-proto': 'https' } });
+  assert.equal(configResponse.status, 200);
+  assert.equal((await configResponse.json()).endpoint, '/v1');
   const models = async (token) => fetch(`${base}/models`, { headers: { authorization: `Bearer ${token}` } });
   const denied = await models('denied');
   assert.equal(denied.status, 502);
