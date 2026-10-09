@@ -201,6 +201,13 @@ td code { color: var(--muted); font: 9px var(--mono); }
 .http-status.error { color: var(--red); }
 .settings-layout { display: grid; grid-template-columns: minmax(0,1.35fr) minmax(260px,.65fr); gap: 14px; }
 .settings-card { grid-column: 1; }
+.codex-controls { display: grid; gap: 16px; padding: 16px 20px 20px; }
+.codex-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; }
+.codex-login-box { display: grid; gap: 10px; padding: 14px; border: 1px solid var(--border); border-radius: 7px; background: #0d1218; }
+.codex-login-box p { margin: 0; color: var(--muted); }
+.codex-login-box a { color: var(--cyan); }
+.codex-login-box code { width: fit-content; padding: 8px 12px; font-size: 1.25rem; letter-spacing: .12em; }
+.codex-login-box.hidden { display: none; }
 .external-providers-card { overflow: hidden; }
 .external-providers { display: grid; gap: 12px; padding: 16px 20px 20px; }
 .external-provider { overflow: hidden; border: 1px solid var(--border); border-radius: 7px; background: #0d1218; }

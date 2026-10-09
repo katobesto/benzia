@@ -428,6 +428,21 @@ function renderSettings() {
   $('#tunnel-origin').textContent = `http://localhost:${settings.gatewayPort}`;
   settings.externalProviders = (settings.externalProviders || []).map((provider) => ({ ...provider, originalId: provider.id, apiKey: provider.apiKey || '', status: provider.status || null }));
   renderExternalProviders();
+  renderCodexSettings();
+}
+
+function renderCodexSettings() {
+  const codex = state.settings?.codexOpenAI || { connected: false, selectedModel: '', models: [] };
+  const status = $('#codex-status');
+  status.className = `connection-pill ${codex.connected ? 'online' : ''}`;
+  status.innerHTML = `<i></i> ${codex.connected ? 'cuenta autorizada' : 'no conectado'}`;
+  $('#codex-login').disabled = codex.connected;
+  $('#codex-refresh-models').disabled = !codex.connected;
+  $('#codex-disconnect').disabled = !codex.connected;
+  const select = $('#codex-model-select');
+  select.disabled = !codex.connected || !codex.models?.length;
+  select.innerHTML = '<option value="">Selecciona un modelo para publicarlo</option>' + (codex.models || []).map((model) => `<option value="${escapeHtml(model.id)}" ${codex.selectedModel === model.id ? 'selected' : ''}>${escapeHtml(model.name || model.id)}</option>`).join('');
+  select.value = codex.selectedModel || '';
 }
 
 function createExternalProvider() {
@@ -959,6 +974,52 @@ $('#external-providers').addEventListener('click', async (event) => {
   } catch (error) { provider.status = { online: false, message: error.message }; }
   renderExternalProviders();
 });
+
+async function loadCodexModels() {
+  const message = $('#codex-message'); message.className = 'form-message'; message.textContent = 'Consultando modelos disponibles…';
+  try {
+    const result = await api('/admin/api/codex/models', { method: 'POST', body: '{}' });
+    state.settings.codexOpenAI = { ...state.settings.codexOpenAI, connected: true, models: result.models };
+    renderCodexSettings(); message.textContent = `${result.models.length} modelos disponibles; elige uno y guarda la configuración.`;
+  } catch (error) { message.className = 'form-message error'; message.textContent = error.message; }
+}
+
+let codexLoginTimer = null;
+let activeCodexLoginId = '';
+$('#codex-login').addEventListener('click', async () => {
+  const message = $('#codex-message'); const box = $('#codex-login-box'); message.className = 'form-message'; message.textContent = 'Iniciando autorización…';
+  try {
+    const login = await api('/admin/api/codex/login/start', { method: 'POST', body: '{}' });
+    activeCodexLoginId = login.loginId;
+    $('#codex-verification-url').href = login.verificationUrl; $('#codex-user-code').textContent = login.userCode; box.classList.remove('hidden');
+    message.textContent = 'Autoriza el dispositivo en OpenAI; benzIA esperará la confirmación del app-server.';
+    clearInterval(codexLoginTimer);
+    codexLoginTimer = setInterval(async () => {
+      try {
+        const response = await fetch(`/admin/api/codex/login/${encodeURIComponent(login.loginId)}`, { credentials: 'same-origin', headers: { 'x-admin-token': state.token } });
+        if (response.status === 202) return;
+        const payload = await response.json(); if (!response.ok) throw new Error(payload.error || 'No se completó la autorización.');
+        clearInterval(codexLoginTimer); codexLoginTimer = null; activeCodexLoginId = ''; box.classList.add('hidden');
+        state.settings.codexOpenAI = { ...(state.settings.codexOpenAI || {}), connected: true }; renderCodexSettings();
+        message.textContent = 'Cuenta autorizada. Cargando modelos…'; await loadCodexModels();
+      } catch (error) { clearInterval(codexLoginTimer); codexLoginTimer = null; activeCodexLoginId = ''; message.className = 'form-message error'; message.textContent = error.message; }
+    }, 2500);
+  } catch (error) { message.className = 'form-message error'; message.textContent = error.message; }
+});
+$('#codex-cancel-login').addEventListener('click', async () => {
+  clearInterval(codexLoginTimer); codexLoginTimer = null;
+  if (activeCodexLoginId) await api('/admin/api/codex/login/cancel', { method: 'POST', body: JSON.stringify({ loginId: activeCodexLoginId }) }).catch(() => {});
+  activeCodexLoginId = ''; $('#codex-login-box').classList.add('hidden'); $('#codex-message').textContent = 'Autorización cancelada.';
+});
+$('#codex-refresh-models').addEventListener('click', loadCodexModels);
+$('#codex-disconnect').addEventListener('click', async () => {
+  try { await api('/admin/api/codex/account', { method: 'DELETE' }); state.settings.codexOpenAI = { connected: false, selectedModel: '', models: [] }; renderCodexSettings(); $('#codex-message').textContent = 'Cuenta Codex desconectada.'; }
+  catch (error) { $('#codex-message').className = 'form-message error'; $('#codex-message').textContent = error.message; }
+});
+$('#codex-model-select').addEventListener('change', () => {
+  const message = $('#codex-message'); message.className = 'form-message'; message.textContent = 'Guarda la configuración para publicar el modelo seleccionado.';
+});
+
 $('#settings-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   const message = $('#settings-message'); message.className = 'form-message'; message.textContent = 'Guardando cambios…';
@@ -970,6 +1031,7 @@ $('#settings-form').addEventListener('submit', async (event) => {
       publicGatewayUrl: $('#public-gateway-url').value,
       braveSearchEndpoint: $('#brave-search-endpoint').value,
       externalProviders: (state.settings.externalProviders || []).map((provider) => ({ id: provider.id, originalId: provider.originalId, name: provider.name, baseUrl: provider.baseUrl, apiKey: provider.apiKey, keepApiKey: provider.hasApiKey && !provider.apiKey })),
+      codexSelectedModel: $('#codex-model-select').value,
       ...(upstreamApiKey ? { upstreamApiKey } : {}),
       ...(braveSearchApiKey ? { braveSearchApiKey } : {})
     }) });

@@ -7,6 +7,7 @@ import { extractAccessToken, PAUSED_TOKEN_MESSAGE } from './access-auth.js';
 import { jsonBodyErrorHandler } from './http-errors.js';
 import { loadModelCapabilities, annotateModel } from './model-capabilities.js';
 import { fetchProviderModels, routeForModel } from './providers.js';
+import { normalizeCodexModels } from './codex-provider.js';
 import { extractOutputText, extractUpstreamTelemetry, extractUsage } from './usage.js';
 import { RateLimiter } from './rate-limit.js';
 
@@ -198,7 +199,8 @@ export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, 
     return {
       upstreamBaseUrl: (stored.upstreamBaseUrl || config.upstreamBaseUrl).replace(/\/+$/, ''),
       upstreamApiKey: stored.upstreamApiKey ?? config.upstreamApiKey,
-      externalProviders: Array.isArray(stored.externalProviders) ? stored.externalProviders : []
+      externalProviders: Array.isArray(stored.externalProviders) ? stored.externalProviders : [],
+      codexOpenAI: stored.codexOpenAI || { connected: false, selectedModel: '', models: [] }
     };
   };
 
@@ -269,33 +271,35 @@ export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, 
       const providers = accessKey.allowExternalProviders
         ? settings.externalProviders.filter((provider) => accessKey.externalProviderIds == null || accessKey.externalProviderIds.includes(provider.id))
         : [];
+      const codexModels = accessKey.allowExternalProviders
+        ? normalizeCodexModels(settings.codexOpenAI.models || [], settings.codexOpenAI.selectedModel)
+        : [];
       const results = await Promise.allSettled([
         fetchProviderModels(localProvider, { timeoutMs: Math.min(config.requestTimeoutMs, 8000) }),
         ...providers.map((provider) => fetchProviderModels(provider, { timeoutMs: Math.min(config.requestTimeoutMs, EXTERNAL_MODELS_TIMEOUT_MS) }))
       ]);
       const hasAnyModelsResponse = results.some((result) => result.status === 'fulfilled');
-      if (!hasAnyModelsResponse) {
-        return res.status(502).json(safeError(502, `No se pudo consultar el proveedor local: ${results[0].reason?.message || 'sin conexión'}.`, 'upstream_unavailable'));
-      }
+      if (!hasAnyModelsResponse && !codexModels.length) return res.status(502).json(safeError(502, `No se pudo consultar el proveedor local: ${results[0].reason?.message || 'sin conexión'}.`, 'upstream_unavailable'));
       const localModels = results[0].status === 'fulfilled' ? results[0].value : [];
       const externalModels = providers.flatMap((provider, index) => {
         const result = results[index + 1];
         if (result.status !== 'fulfilled') return [];
-        return result.value.map((model) => ({
-          ...model,
-          id: `${provider.id}/${model.id}`,
-          owned_by: provider.name,
-          benzIA_provider: { id: provider.id, name: provider.name, external: true }
-        }));
+        return result.value.map((model) => ({ ...model, id: `${provider.id}/${model.id}`, owned_by: provider.name, benzIA_provider: { id: provider.id, name: provider.name, external: true } }));
       });
-      const failed = [
-        ...(results[0].status === 'rejected' ? ['local'] : []),
-        ...providers.filter((_provider, index) => results[index + 1].status === 'rejected').map((provider) => provider.id)
-      ];
+      const failed = [...(results[0].status === 'rejected' ? ['local'] : []), ...providers.filter((_provider, index) => results[index + 1].status === 'rejected').map((provider) => provider.id)];
       if (failed.length) res.set('x-benzia-provider-errors', failed.join(','));
       const capabilities = await loadModelCapabilities(config.dataDir);
-      return res.json({ object: 'list', data: [...localModels, ...externalModels].map((model) => annotateModel(model, capabilities)) });
+      return res.json({ object: 'list', data: [...localModels, ...codexModels, ...externalModels].map((model) => annotateModel(model, capabilities)) });
     }
+
+    const codexConfig = settings.codexOpenAI;
+    const codexRoute = typeof body?.model === 'string' && body.model.startsWith('openai/')
+      ? normalizeCodexModels(codexConfig.models || [], codexConfig.selectedModel).find((model) => model.id === body.model)
+      : null;
+    if (typeof body?.model === 'string' && body.model.startsWith('openai/') && !codexRoute) return res.status(404).json(safeError(404, 'El modelo OpenAI Codex solicitado no está publicado.', 'model_not_found'));
+    if (codexRoute && path !== '/v1/chat/completions') return res.status(400).json(safeError(400, 'OpenAI Codex en benzIA admite /v1/chat/completions; el app-server no ofrece embeddings ni el formato de Responses API a través de este adaptador.', 'unsupported_endpoint'));
+    if (codexRoute && !accessKey.allowExternalProviders) return res.status(403).json(safeError(403, 'Este token sólo puede utilizar el proveedor local.', 'external_provider_forbidden'));
+    if (codexRoute && accessKey.externalProviderIds && !accessKey.externalProviderIds.includes('openai')) return res.status(403).json(safeError(403, 'Este token no tiene acceso a OpenAI Codex.', 'external_provider_forbidden'));
 
     const externalRoute = routeForModel(body?.model, settings.externalProviders);
     if (externalRoute && !accessKey.allowExternalProviders) {
@@ -304,10 +308,10 @@ export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, 
     if (externalRoute && accessKey.externalProviderIds && !accessKey.externalProviderIds.includes(externalRoute.provider.id)) {
       return res.status(403).json(safeError(403, 'Este token no tiene acceso a ese proveedor externo.', 'external_provider_forbidden'));
     }
-    const selectedProvider = externalRoute?.provider || {
+    const selectedProvider = codexRoute ? { id: 'openai', name: 'OpenAI Codex', baseUrl: 'codex://app-server', apiKey: '' } : externalRoute?.provider || {
       id: 'local', name: 'Proveedor IA Local', baseUrl: settings.upstreamBaseUrl, apiKey: settings.upstreamApiKey
     };
-    const upstreamUrl = `${selectedProvider.baseUrl}${req.originalUrl}`;
+    const upstreamUrl = codexRoute ? '' : `${selectedProvider.baseUrl}${req.originalUrl}`;
     const upstreamBody = body ? structuredClone(body) : undefined;
     if (externalRoute && upstreamBody) upstreamBody.model = externalRoute.upstreamModel;
     if (upstreamBody?.stream && path === '/v1/chat/completions') {
@@ -369,6 +373,39 @@ export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, 
         releaseInference = await config.inferenceAdmission.acquire(selectedProvider.baseUrl, controller.signal);
         startUpstreamTimeout();
       }
+      if (codexRoute) {
+        const completionId = `chatcmpl-${crypto.randomUUID().replaceAll('-', '')}`;
+        const created = Math.floor(Date.now() / 1000);
+        let streamedText = '';
+        const emitDelta = async (delta) => {
+          streamedText += delta;
+          if (trackLive) liveActivity?.update(requestId, streamedText, delta);
+          const chunk = { id: completionId, object: 'chat.completion.chunk', created, model: body.model, choices: [{ index: 0, delta: { content: delta }, finish_reason: null }] };
+          await writeWithBackpressure(res, `data: ${JSON.stringify(chunk)}${String.fromCharCode(10, 10)}`);
+        };
+        if (isStream) {
+          res.status(200).set({ 'content-type': 'text/event-stream', 'cache-control': 'no-cache, no-transform', connection: 'keep-alive', 'x-accel-buffering': 'no', 'x-lm-gateway-request-id': requestId });
+          res.flushHeaders?.();
+        }
+        const result = await config.codexAppServer.generate(upstreamBody, { signal: controller.signal, ...(isStream ? { onDelta: emitDelta } : {}) });
+        clearUpstreamTimeout();
+        const content = await result.completion;
+        cleanupRequest();
+        const completedAt = Date.now();
+        const outputTokens = Math.max(0, Math.ceil(content.length / 4));
+        const usage = { inputTokens: 0, outputTokens, usageSource: 'estimated', lmCachedInputTokens: null, lmCacheSource: 'unavailable' };
+        const telemetry = extractUpstreamTelemetry({}, { outputTokens, startedAt, completedAt });
+        await recordMetricSafely(store, { id: requestId, at: new Date().toISOString(), keyId: accessKey.id, path, model: body?.model || null, provider: 'openai', status: 200, latencyMs: completedAt - startedAt, ...usage, ...telemetry, stream: isStream });
+        if (trackLive) liveActivity?.finish(requestId);
+        if (isStream) {
+          // Headers were flushed before starting Codex so deltas reach clients immediately.
+          const chunks = streamedText ? [] : (content.match(/.{1,40}/gs) || ['']);
+          for (const chunk of chunks) await writeWithBackpressure(res, `data: ${JSON.stringify({ id: completionId, object: 'chat.completion.chunk', created: Math.floor(completedAt / 1000), model: body.model, choices: [{ index: 0, delta: { content: chunk }, finish_reason: null }] })}\n\n`);
+          await writeWithBackpressure(res, `data: ${JSON.stringify({ id: completionId, object: 'chat.completion.chunk', created: Math.floor(completedAt / 1000), model: body.model, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`);
+          return res.end();
+        }
+        return res.status(200).json({ id: completionId, object: 'chat.completion', created: Math.floor(completedAt / 1000), model: body.model, choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' }], usage: { prompt_tokens: 0, completion_tokens: outputTokens, total_tokens: outputTokens } });
+      }
       const requestUpstream = (requestBody) => fetch(upstreamUrl, {
         method: req.method,
         headers: {
@@ -424,7 +461,14 @@ export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, 
         generationDurationMs: null, timeToFirstTokenMs: null,
         stream: isStream
       });
-      if (clientDisconnected || res.headersSent) return;
+      if (clientDisconnected) return;
+      if (res.headersSent) {
+        if (isStream && !res.writableEnded) {
+          await writeWithBackpressure(res, `data: ${JSON.stringify(safeError(status, message, timedOut ? 'upstream_timeout' : 'upstream_unavailable'))}${String.fromCharCode(10, 10)}`).catch(() => {});
+          if (!res.writableEnded) res.end();
+        }
+        return;
+      }
       return res.status(status).json(safeError(status, message, timedOut ? 'upstream_timeout' : 'upstream_unavailable'));
     }
 

@@ -662,3 +662,52 @@ test('autentica un token real y persiste únicamente la caché reportada por el 
   assert.ok(metrics.every((metric) => !('cacheStatus' in metric)));
   assert.ok(metrics.every((metric) => metric.keyId === access.id));
 });
+
+test('Codex chat streaming forwards each delta before the turn completes', async (t) => {
+  let finishTurn;
+  let codexCalls = 0;
+  const codexAppServer = {
+    async generate(_body, { onDelta }) {
+      codexCalls += 1;
+      await onDelta('first');
+      await new Promise((resolve) => { finishTurn = resolve; });
+      await onDelta('second');
+      return { completion: Promise.resolve('firstsecond') };
+    }
+  };
+  const settings = { codexOpenAI: { connected: true, selectedModel: 'codex-model', models: [{ id: 'codex-model', name: 'Codex' }] } };
+  const store = {
+    getSettings: () => settings,
+    findKeyByToken: (token) => token === 'codex-key' ? { id: 'codex-key', allowExternalProviders: true } : null,
+    recordMetric: async () => {}
+  };
+  const gateway = createGatewayApp({ config: { upstreamBaseUrl: 'http://127.0.0.1:1', upstreamApiKey: '', requestTimeoutMs: 5000, codexAppServer }, store });
+  const server = gateway.listen(0, '127.0.0.1');
+  await new Promise((resolve) => server.once('listening', resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+
+  const response = await fetch(`http://127.0.0.1:${server.address().port}/v1/chat/completions`, {
+    method: 'POST', headers: { authorization: 'Bearer codex-key', 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'openai/codex-model', stream: true, messages: [{ role: 'user', content: 'Hello' }] })
+  });
+  assert.equal(response.status, 200);
+  assert.ok(response.headers.get('content-type').includes('text/event-stream'));
+  const reader = response.body.getReader();
+  const firstRead = await reader.read();
+  const firstEvent = new TextDecoder().decode(firstRead.value);
+  assert.match(firstEvent, /first/);
+  assert.equal(finishTurn instanceof Function, true);
+  finishTurn();
+  const remainder = await new Response(new ReadableStream({
+    async pull(controller) { const next = await reader.read(); next.done ? controller.close() : controller.enqueue(next.value); }
+  })).text();
+  assert.match(remainder, /second/);
+  assert.ok(remainder.includes('[DONE]'));
+  const unsupported = await fetch(`http://127.0.0.1:${server.address().port}/v1/responses`, {
+    method: 'POST', headers: { authorization: 'Bearer codex-key', 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'openai/codex-model', input: 'Hello' })
+  });
+  assert.equal(unsupported.status, 400);
+  assert.equal((await unsupported.json()).error.type, 'unsupported_endpoint');
+  assert.equal(codexCalls, 1);
+});

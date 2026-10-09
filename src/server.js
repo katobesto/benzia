@@ -1,3 +1,4 @@
+import path from 'node:path';
 import 'dotenv/config';
 
 import { createAdminApp } from './admin.js';
@@ -10,6 +11,7 @@ import { LiveActivity } from './live-activity.js';
 import { createLlamaLogReader } from './llama-log.js';
 import { RateLimiter } from './rate-limit.js';
 import { InferenceAdmission } from './inference-admission.js';
+import { CodexAppServer } from './codex-provider.js';
 
 const config = loadConfig();
 
@@ -24,6 +26,7 @@ const liveActivity = new LiveActivity({ prefillRateReader: createLlamaLogReader(
 const rateLimiter = new RateLimiter({ limit: config.rateLimitAuthPerMinute });
 
 config.inferenceAdmission = new InferenceAdmission({ limit: config.maxConcurrentInference, maxQueue: config.inferenceQueueSize, waitMs: config.inferenceQueueWaitMs });
+config.codexAppServer = new CodexAppServer({ homeDir: path.join(config.dataDir, 'codex-home') });
 const adminApp = createAdminApp({ config, store, liveActivity });
 const chatApp = createChatApp({ config, store, rateLimiter });
 const statusApp = createStatusApp({ config, store, liveActivity });
@@ -60,6 +63,8 @@ const shutdown = async (signal) => {
   adminServer.closeIdleConnections?.();
   gatewayServer.closeIdleConnections?.();
   await Promise.allSettled([closeServer(adminServer), closeServer(gatewayServer)]);
+  adminApp.locals.shutdown?.();
+  await config.codexAppServer?.close?.();
   store.close();
   clearTimeout(forceExit);
   process.exitCode = 0;

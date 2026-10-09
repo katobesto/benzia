@@ -9,6 +9,10 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 
+# Codex app-server runs as a child process under the persistent data home.
+ENV CODEX_HOME=/app/data/codex-home
+RUN mkdir -p /app/data/codex-home && chown -R node:node /app/data
+
 # The application is intentionally copied without tests, local data or secrets.
 COPY src ./src
 COPY public ./public

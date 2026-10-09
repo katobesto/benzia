@@ -12,6 +12,7 @@ import { CAPABILITIES_FILENAME, loadModelCapabilities, sanitizeModelCapabilities
 import { buildOverviewPayload } from './overview.js';
 import { fetchProviderModels, normalizeProviderBaseUrl, publicExternalProviders, sanitizeExternalProviders, PROVIDER_ID_PATTERN } from './providers.js';
 import { jsonBodyErrorHandler } from './http-errors.js';
+import { normalizeCodexModels } from './codex-provider.js';
 
 const publicDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../public');
 
@@ -81,6 +82,37 @@ export function createAdminApp({ config, store, liveActivity }) {
   app.use(express.static(publicDir, { extensions: ['html'], index: false }));
 
   const auth = adminAuth(config.adminToken);
+  const pendingCodexLogins = new Map();
+  const codexSessionStore = path.join(config.dataDir || process.env.DATA_DIR || '/tmp/benzia-data', 'codex-home');
+  const watchCodexLogin = (loginId) => {
+    const codex = config.codexAppServer;
+    const entry = { status: 'pending', error: null, off: null, timer: null };
+    const cleanup = () => { clearTimeout(entry.timer); entry.off?.(); entry.off = null; };
+    entry.off = codex.on('notification', async (message) => {
+      if (message.method !== 'account/login/completed' || message.params?.loginId !== loginId || entry.status !== 'pending') return;
+      cleanup();
+      if (message.params.success === false || message.params.error) {
+        entry.status = 'failed'; entry.error = 'No se pudo autorizar la cuenta de Codex.'; return;
+      }
+      try {
+        const account = await codex.readAccount();
+        if (account.requiresOpenaiAuth) throw new Error('not authorized');
+        const settings = store.getSettings();
+        await store.updateSettings({ codexOpenAI: { ...(settings.codexOpenAI || {}), connected: true } });
+        entry.status = 'authorized';
+      } catch {
+        entry.status = 'failed'; entry.error = 'No se pudo confirmar la autorización de Codex.';
+      }
+    });
+    entry.timer = setTimeout(() => {
+      cleanup(); entry.status = 'expired'; entry.error = 'La autorización de Codex expiró.';
+    }, 180000);
+    pendingCodexLogins.set(loginId, entry);
+  };
+  app.locals.shutdown = () => {
+    for (const entry of pendingCodexLogins.values()) { clearTimeout(entry.timer); entry.off?.(); }
+    pendingCodexLogins.clear();
+  };
   app.get('/admin/api/session', auth, (_req, res) => res.json({ authenticated: true }));
 
   app.post('/admin/api/server-session', auth, (_req, res) => {
@@ -256,6 +288,7 @@ export function createAdminApp({ config, store, liveActivity }) {
       braveSearchEndpoint: settings.braveSearchEndpoint || config.braveSearchEndpoint || DEFAULT_BRAVE_SEARCH_ENDPOINT,
       hasBraveSearchApiKey,
       externalProviders: publicExternalProviders(externalProviders),
+      codexOpenAI: { connected: Boolean(settings.codexOpenAI?.connected), selectedModel: settings.codexOpenAI?.selectedModel || '', models: settings.codexOpenAI?.models || [] },
       storage: store.storageStats?.() || null,
       retentionDays: config.metricsRetentionDays
     });
@@ -300,8 +333,64 @@ export function createAdminApp({ config, store, liveActivity }) {
         return res.status(400).json({ error: error.message || 'La configuración de proveedores externos no es válida.' });
       }
     }
+    if ('codexSelectedModel' in req.body) {
+      const saved = store.getSettings().codexOpenAI || {};
+      const models = Array.isArray(saved.models) ? saved.models : [];
+      if (typeof req.body.codexSelectedModel !== 'string' || (req.body.codexSelectedModel && !models.some((model) => model.id === req.body.codexSelectedModel))) return res.status(400).json({ error: 'El modelo OpenAI Codex seleccionado no es válido.' });
+      patch.codexOpenAI = { ...saved, selectedModel: req.body.codexSelectedModel };
+    }
     await store.updateSettings(patch);
     res.json({ updated: true });
+  });
+
+  app.post('/admin/api/codex/login/start', auth, async (_req, res) => {
+    const codex = config.codexAppServer;
+    if (!codex) return res.status(503).json({ error: 'Codex app-server no está disponible.' });
+    try {
+      await fs.mkdir(codexSessionStore, { recursive: true });
+      codex.homeDir = codexSessionStore;
+      const account = await codex.readAccount();
+      if (!account.requiresOpenaiAuth) return res.status(409).json({ error: 'Ya hay una cuenta Codex autorizada.' });
+      const login = await codex.startDeviceLogin();
+      watchCodexLogin(login.loginId);
+      res.json(login);
+    } catch { res.status(502).json({ error: 'No se pudo iniciar la autorización de Codex. Comprueba que Codex está instalado.' }); }
+  });
+  app.get('/admin/api/codex/login/:loginId', auth, (req, res) => {
+    const entry = pendingCodexLogins.get(req.params.loginId);
+    if (!entry) return res.status(404).json({ error: 'La autorización no está activa.' });
+    if (entry.status === 'pending') return res.status(202).json({ pending: true });
+    if (entry.status === 'authorized') return res.json({ authorized: true });
+    return res.status(entry.status === 'expired' ? 410 : 502).json({ error: entry.error || 'No se pudo completar la autorización.' });
+  });
+  app.post('/admin/api/codex/login/cancel', auth, async (req, res) => {
+    const loginId = req.body?.loginId;
+    if (typeof loginId !== 'string' || !pendingCodexLogins.has(loginId)) return res.status(404).json({ error: 'La autorización no está activa.' });
+    try {
+      await config.codexAppServer.cancelDeviceLogin(loginId);
+      const entry = pendingCodexLogins.get(loginId);
+      if (entry) { clearTimeout(entry.timer); entry.off?.(); pendingCodexLogins.delete(loginId); }
+      res.json({ cancelled: true });
+    }
+    catch { res.status(502).json({ error: 'No se pudo cancelar la autorización.' }); }
+  });
+  app.post('/admin/api/codex/models', auth, async (_req, res) => {
+    try {
+      const account = await config.codexAppServer.readAccount();
+      if (account.requiresOpenaiAuth) return res.status(409).json({ error: 'Autoriza la cuenta Codex antes de consultar modelos.' });
+      const models = await config.codexAppServer.listModels();
+      const current = store.getSettings().codexOpenAI || {};
+      await store.updateSettings({ codexOpenAI: { ...current, connected: true, models } });
+      res.json({ models });
+    } catch { res.status(502).json({ error: 'No se pudieron consultar los modelos disponibles de Codex.' }); }
+  });
+  app.delete('/admin/api/codex/account', auth, async (_req, res) => {
+    try {
+      await config.codexAppServer.logout();
+      await fs.rm(codexSessionStore, { recursive: true, force: true });
+      await store.updateSettings({ codexOpenAI: { connected: false, selectedModel: '', models: [] } });
+      res.json({ disconnected: true });
+    } catch { res.status(502).json({ error: 'No se pudo cerrar la sesión Codex.' }); }
   });
 
   app.get('/admin/api/upstream/status', auth, async (_req, res) => {
