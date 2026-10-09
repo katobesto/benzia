@@ -82,15 +82,25 @@ export function createAdminApp({ config, store, liveActivity }) {
   app.use(express.static(publicDir, { extensions: ['html'], index: false }));
 
   const auth = adminAuth(config.adminToken);
+  app.use('/admin/api/codex', auth, (req, res, next) => {
+    const id = crypto.randomUUID();
+    const started = Date.now();
+    res.set('x-request-id', id);
+    res.locals.codexTrace = (stage, error) => console.info(`[codex-auth] ${JSON.stringify({ id, event: stage, ...(error ? { errorName: error.name, errorCode: error.code } : {}) })}`);
+    console.info(`[codex-auth] ${JSON.stringify({ id, event: 'request', method: req.method, route: req.path.startsWith('/login/') && !['/login/start', '/login/cancel'].includes(req.path) ? '/login/:id' : req.path })}`);
+    res.once('finish', () => console.info(`[codex-auth] ${JSON.stringify({ id, event: 'response', status: res.statusCode, durationMs: Date.now() - started })}`));
+    next();
+  });
   const pendingCodexLogins = new Map();
   const codexSessionStore = path.join(config.dataDir || process.env.DATA_DIR || '/tmp/benzia-data', 'codex-home');
-  const watchCodexLogin = (loginId) => {
+  const watchCodexLogin = (loginId, trace = () => {}) => {
     const codex = config.codexAppServer;
     const entry = { status: 'pending', error: null, off: null, timer: null };
     const cleanup = () => { clearTimeout(entry.timer); entry.off?.(); entry.off = null; };
-    entry.off = codex.on('notification', async (message) => {
+    const handleCompletion = async (message) => {
       if (message.method !== 'account/login/completed' || message.params?.loginId !== loginId || entry.status !== 'pending') return;
       cleanup();
+      trace(message.params.success === false || message.params.error ? 'login/completed:failed' : 'login/completed:success');
       if (message.params.success === false || message.params.error) {
         entry.status = 'failed'; entry.error = 'No se pudo autorizar la cuenta de Codex.'; return;
       }
@@ -100,14 +110,18 @@ export function createAdminApp({ config, store, liveActivity }) {
         const settings = store.getSettings();
         await store.updateSettings({ codexOpenAI: { ...(settings.codexOpenAI || {}), connected: true } });
         entry.status = 'authorized';
-      } catch {
+        trace('account/authorized');
+      } catch (error) {
+        trace('account/confirmation:error', error);
         entry.status = 'failed'; entry.error = 'No se pudo confirmar la autorización de Codex.';
       }
-    });
+    };
+    entry.off = codex.on('notification', handleCompletion);
     entry.timer = setTimeout(() => {
-      cleanup(); entry.status = 'expired'; entry.error = 'La autorización de Codex expiró.';
+      cleanup(); trace('login/expired'); entry.status = 'expired'; entry.error = 'La autorización de Codex expiró.';
     }, 180000);
     pendingCodexLogins.set(loginId, entry);
+    return handleCompletion;
   };
   app.locals.shutdown = () => {
     for (const entry of pendingCodexLogins.values()) { clearTimeout(entry.timer); entry.off?.(); }
@@ -349,12 +363,23 @@ export function createAdminApp({ config, store, liveActivity }) {
     try {
       await fs.mkdir(codexSessionStore, { recursive: true });
       codex.homeDir = codexSessionStore;
+      res.locals.codexTrace('account/read:start');
       const account = await codex.readAccount();
+      res.locals.codexTrace('account/read:done');
       if (!account.requiresOpenaiAuth) return res.status(409).json({ error: 'Ya hay una cuenta Codex autorizada.' });
-      const login = await codex.startDeviceLogin();
-      watchCodexLogin(login.loginId);
-      res.json(login);
-    } catch { res.status(502).json({ error: 'No se pudo iniciar la autorización de Codex. Comprueba que Codex está instalado.' }); }
+      const earlyCompletions = [];
+      const offEarly = codex.on('notification', (message) => {
+        if (message.method === 'account/login/completed') earlyCompletions.push(message);
+      });
+      try {
+        res.locals.codexTrace('login/start:start');
+        const login = await codex.startDeviceLogin();
+        res.locals.codexTrace('login/start:done');
+        const handleCompletion = watchCodexLogin(login.loginId, res.locals.codexTrace);
+        for (const message of earlyCompletions) void handleCompletion(message);
+        res.json(login);
+      } finally { offEarly(); }
+    } catch (error) { res.locals.codexTrace('login/start:error', error); res.status(502).json({ error: 'No se pudo iniciar la autorización de Codex. Consulta el ID de petición en los logs del servidor.' }); }
   });
   app.get('/admin/api/codex/login/:loginId', auth, (req, res) => {
     const entry = pendingCodexLogins.get(req.params.loginId);

@@ -10,12 +10,18 @@ test('non-JSON API responses report status and content type rather than a parser
   await assert.rejects(parseApiResponse(response), /no es JSON válido.*HTTP 200.*text\/html/i);
 });
 
+test('non-JSON gateway failures identify the edge request without exposing the response body', async () => {
+  const response = new Response('<html>secret</html>', { status: 502, headers: { 'content-type': 'text/html', 'cf-ray': 'ray-123' } });
+  await assert.rejects(parseApiResponse(response), (error) => error.message.includes('ray-123') && !error.message.includes('secret'));
+});
+
+
 test('API parser preserves JSON error messages and accepts pending responses', async () => {
   const failed = new Response(JSON.stringify({ error: 'Codex no disponible' }), {
     status: 502,
-    headers: { 'content-type': 'application/json' }
+    headers: { 'content-type': 'application/json', 'x-request-id': 'req-456' }
   });
-  await assert.rejects(parseApiResponse(failed), /Codex no disponible/);
+  await assert.rejects(parseApiResponse(failed), /Codex no disponible.*req-456/);
   const pending = new Response(JSON.stringify({ pending: true }), {
     status: 202,
     headers: { 'content-type': 'application/json' }
