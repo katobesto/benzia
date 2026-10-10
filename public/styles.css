@@ -97,6 +97,18 @@ label small { color: var(--muted-2); font: 10px/1.5 var(--font); letter-spacing:
 .legend-dot { width: 7px; height: 7px; display: inline-block; margin-right: 6px; border-radius: 2px; }
 .input-dot { background: var(--cyan); }
 .output-dot { background: var(--blue); }
+.codex-usage-panel { margin-bottom: 12px; }
+.codex-usage-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; padding: 20px; }
+.codex-usage-window { min-width: 0; display: grid; gap: 11px; }
+.codex-usage-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; font-size: 12px; }
+.codex-usage-heading strong { font-weight: 600; }
+.codex-usage-heading span { color: var(--cyan); font: 600 16px var(--mono); }
+.codex-usage-track { height: 10px; overflow: hidden; border-radius: 6px; background: var(--surface-3); }
+.codex-usage-track span { display: block; height: 100%; width: 0; border-radius: inherit; background: var(--cyan); transition: width .4s ease; }
+.codex-usage-track span.near-limit { background: var(--amber); }
+.codex-usage-track span.exhausted { background: var(--red); }
+.codex-usage-window small { color: var(--muted); font-size: 11px; }
+@media (max-width: 650px) { .codex-usage-grid { grid-template-columns: 1fr; gap: 20px; } }
 .live-stream-panel { margin-bottom: 13px; overflow: hidden; }
 .live-stream-header { min-height: 76px; align-items: center; }
 .live-summary { display: flex; align-items: center; gap: 22px; }

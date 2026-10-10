@@ -1,4 +1,4 @@
-import { parseApiResponse, providerFilterOptions } from './api-client.js?v=12';
+import { parseApiResponse, providerFilterOptions } from './api-client.js?v=13';
 
 const routes = {
   '/': 'dashboard',
@@ -151,6 +151,7 @@ async function loadAll() {
   renderKeyFilter();
   renderKeys();
   renderSettings();
+  if (pageName === 'dashboard') refreshCodexUsage();
   renderOpenCodeUtility();
   if (state.overview) renderOverview();
   if (pageName === 'security') {
@@ -162,6 +163,33 @@ async function loadAll() {
   } else clearInterval(window.securityRefreshTimer);
   if (state.live) renderLive();
   checkUpstream();
+}
+
+async function refreshCodexUsage() {
+  const panel = $('#codex-usage');
+  if (STATUS_MODE || !state.settings?.codexOpenAI?.connected || !state.token) {
+    panel.classList.add('hidden');
+    return;
+  }
+  panel.classList.remove('hidden');
+  let limits;
+  try { limits = await api('/admin/api/codex/rate-limits'); }
+  catch { limits = {}; }
+  for (const [key, window] of [['five-hour', limits.fiveHour], ['weekly', limits.weekly]]) {
+    const value = $(`#codex-${key}-value`);
+    const bar = $(`#codex-${key}-bar`);
+    const progress = $(`#codex-${key}-progress`);
+    const reset = $(`#codex-${key}-reset`);
+    const used = Number.isFinite(window?.usedPercent) ? Math.max(0, Math.min(100, window.usedPercent)) : null;
+    value.textContent = used === null ? '—' : `${exactNumber.format(used)} % usado`;
+    bar.style.width = `${used ?? 0}%`;
+    bar.classList.toggle('near-limit', used !== null && used >= 80 && used < 100);
+    bar.classList.toggle('exhausted', used === 100);
+    if (used === null) progress.removeAttribute('aria-valuenow');
+    else progress.setAttribute('aria-valuenow', String(used));
+    const date = window?.resetsAt == null ? null : new Date(window.resetsAt * 1000);
+    reset.textContent = used === null ? 'Límite no disponible' : date && !Number.isNaN(date.getTime()) ? `Se restablece el ${dateTime.format(date)}` : 'Fecha de restablecimiento no disponible';
+  }
 }
 
 function renderSecurityEvents(events = []) {
@@ -1137,4 +1165,5 @@ api(sessionPath)
   .then(() => { hideAuth(); revealApp(); loadAll().catch((error) => toast(error.message)); })
   .catch(() => { showAuth(); revealApp(); });
 setInterval(() => { if (state.token && document.visibilityState === 'visible' && (pageName === 'dashboard' || pageName === 'activity')) refreshOverview().catch(() => {}); }, 15000);
+setInterval(() => { if (state.token && document.visibilityState === 'visible' && pageName === 'dashboard' && !STATUS_MODE) refreshCodexUsage(); }, 60000);
 setInterval(() => { if (state.token && document.visibilityState === 'visible' && pageName === 'dashboard') refreshLive().catch(() => {}); }, 1000);

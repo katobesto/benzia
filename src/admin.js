@@ -290,6 +290,13 @@ export function createAdminApp({ config, store, liveActivity }) {
     res.status(204).end();
   });
 
+  app.get('/admin/api/codex/rate-limits', auth, async (_req, res) => {
+    const codex = config.codexAppServer;
+    if (!store.getSettings().codexOpenAI?.connected || !codex) return res.status(404).json({ error: 'Codex no está conectado.' });
+    try { return res.json(await codex.readRateLimits()); }
+    catch { return res.status(503).json({ error: 'No se pudieron consultar los límites de Codex.' }); }
+  });
+
   app.get('/admin/api/settings', auth, (_req, res) => {
     const settings = store.getSettings();
     const hasUpstreamApiKey = Boolean(settings.upstreamApiKey ?? config.upstreamApiKey);

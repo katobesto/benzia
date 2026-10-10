@@ -32,6 +32,26 @@ test('device-code login starts via app-server and publishes returned URL and cod
   assert.deepEqual(calls, [{ method: 'account/login/start', params: { type: 'chatgptDeviceCode' } }]);
 });
 
+test('Codex usage reads live rate limits and exposes only 5-hour and weekly windows', async () => {
+  const codex = new CodexAppServer({ request: async (method, params) => {
+    assert.equal(method, 'account/rateLimits/read');
+    assert.deepEqual(params, {});
+    return { rateLimits: { limitId: 'codex', primary: { usedPercent: 29, windowDurationMins: 300, resetsAt: 1770000000 }, secondary: { usedPercent: 72, windowDurationMins: 10080, resetsAt: 1770500000 }, credentials: 'do-not-expose' }, rateLimitsByLimitId: {} };
+  } });
+  assert.deepEqual(await codex.readRateLimits(), {
+    fiveHour: { usedPercent: 29, resetsAt: 1770000000 },
+    weekly: { usedPercent: 72, resetsAt: 1770500000 }
+  });
+});
+
+test('Codex usage does not mislabel missing or different-duration windows', async () => {
+  const codex = new CodexAppServer({ request: async () => ({ rateLimits: {
+    primary: { usedPercent: 40, windowDurationMins: 60, resetsAt: null },
+    secondary: { usedPercent: 0, windowDurationMins: 10080, resetsAt: null }
+  } }) });
+  assert.deepEqual(await codex.readRateLimits(), { fiveHour: null, weekly: { usedPercent: 0, resetsAt: null } });
+});
+
 test('device login response retains only safe public fields', () => {
   assert.deepEqual(normalizeCodexDeviceLogin({ type: 'chatgptDeviceCode', loginId: 'abc', verificationUrl: 'https://auth.openai.com/codex/device', userCode: 'ABCD-1234', token: 'secret' }), {
     type: 'chatgptDeviceCode', loginId: 'abc', verificationUrl: 'https://auth.openai.com/codex/device', userCode: 'ABCD-1234'

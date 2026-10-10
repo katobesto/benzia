@@ -93,6 +93,20 @@ export class CodexAppServer {
   async startDeviceLogin() { return normalizeCodexDeviceLogin(await this.request('account/login/start', { type: 'chatgptDeviceCode' })); }
   async cancelDeviceLogin(loginId) { return this.request('account/login/cancel', { loginId }); }
   async readAccount() { return this.request('account/read', {}); }
+  async readRateLimits() {
+    const response = await this.request('account/rateLimits/read', {});
+    const limits = response.rateLimitsByLimitId?.codex || response.rateLimits;
+    const windows = [limits?.primary, limits?.secondary];
+    const pick = (duration) => {
+      const window = windows.find((item) => item?.windowDurationMins === duration);
+      if (!window || !Number.isFinite(window.usedPercent)) return null;
+      return {
+        usedPercent: Math.max(0, Math.min(100, window.usedPercent)),
+        resetsAt: Number.isFinite(window.resetsAt) ? window.resetsAt : null
+      };
+    };
+    return { fiveHour: pick(300), weekly: pick(10080) };
+  }
   async logout() { return this.request('account/logout', {}); }
 
   async listModels() {

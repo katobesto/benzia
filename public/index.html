@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
   <title>benzIA Console</title>
-  <link rel="stylesheet" href="/styles.css?v=12">
+  <link rel="stylesheet" href="/styles.css?v=13">
 </head>
 <body>
   <div class="app-shell">
@@ -46,6 +46,13 @@
           <article class="metric-card"><div class="metric-label"><span>Latencia media</span><i class="metric-icon amber">ms</i></div><strong id="metric-latency">0 <small>ms</small></strong><div class="metric-detail"><span>tiempo completo de cada petición</span></div></article>
           <article class="metric-card"><div class="metric-label"><span>Rendimiento medio</span><i class="metric-icon cyan">T/s</i></div><strong id="metric-throughput">—</strong><div class="metric-detail"><span id="metric-throughput-detail">sin emisiones medidas</span></div></article>
         </div>
+        <article id="codex-usage" class="panel codex-usage-panel hidden" aria-label="Límites de uso de OpenAI Codex">
+          <div class="panel-header"><div><h2>Uso de OpenAI Codex</h2><p>Límites de la cuenta conectada · no dependen de los filtros del dashboard</p></div><span class="panel-unit">CUOTA UTILIZADA</span></div>
+          <div class="codex-usage-grid">
+            <div class="codex-usage-window"><div class="codex-usage-heading"><strong>Últimas 5 horas</strong><span id="codex-five-hour-value">—</span></div><div class="codex-usage-track" role="progressbar" aria-label="Uso del límite de 5 horas" aria-valuemin="0" aria-valuemax="100" id="codex-five-hour-progress"><span id="codex-five-hour-bar"></span></div><small id="codex-five-hour-reset">Consultando límite…</small></div>
+            <div class="codex-usage-window"><div class="codex-usage-heading"><strong>Límite semanal</strong><span id="codex-weekly-value">—</span></div><div class="codex-usage-track" role="progressbar" aria-label="Uso del límite semanal" aria-valuemin="0" aria-valuemax="100" id="codex-weekly-progress"><span id="codex-weekly-bar"></span></div><small id="codex-weekly-reset">Consultando límite…</small></div>
+          </div>
+        </article>
         <article class="panel live-stream-panel" id="live-stream-panel">
           <div class="panel-header live-stream-header"><div><h2>Emisión en tiempo real</h2><p>Velocidad móvil de los últimos 5 s · <span id="historical-throughput">sin histórico todavía</span></p></div><div class="live-summary"><span class="live-state" id="live-state"><i></i><b id="live-count">0</b> activas</span><strong><span id="live-tps">0</span> <small>tok/s ahora</small></strong></div></div>
           <div id="live-streams" class="live-streams"><div class="live-empty"><span></span>Ningún modelo está emitiendo tokens ahora</div></div>
@@ -122,6 +129,6 @@
   <dialog id="key-stats-dialog"><div class="dialog-card key-stats-card"><button class="dialog-close" id="close-key-stats" type="button" aria-label="Cerrar">×</button><div class="dialog-icon">◷</div><p class="overline">USO DE LA CLAVE</p><h2 id="key-stats-title">Información del límite</h2><p id="key-stats-subtitle">Detalle de tokens y caché</p><div id="key-stats-content" class="key-stats-content"><div class="key-stats-loading">Cargando estadísticas…</div></div></div></dialog>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
   <dialog id="provider-dialog"><form method="dialog" class="dialog-card provider-filter-card" id="provider-filter-form"><button class="dialog-close" value="cancel" type="submit" aria-label="Cerrar">×</button><div class="dialog-icon">⇄</div><p class="overline">PROVEEDORES EXTERNOS</p><h2 id="provider-filter-key-name">Proveedores visibles</h2><p>Marca los proveedores externos que esta clave podrá ver. La selección actúa como filtro: solo se muestran si también están disponibles en benzIA.</p><div id="provider-filter-list" class="provider-filter-list"></div><button class="primary-button wide" value="default" type="submit">Guardar selección</button><p class="form-message error" id="provider-filter-message" aria-live="polite"></p></form></dialog>
-  <script src="/app.js?v=12" type="module"></script>
+  <script src="/app.js?v=13" type="module"></script>
 </body>
 </html>

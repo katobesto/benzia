@@ -17,6 +17,7 @@ test('Codex admin endpoints expose device code and keep credentials out of setti
     startDeviceLogin: async () => ({ type: 'chatgptDeviceCode', loginId: 'login-1', verificationUrl: 'https://auth.openai.com/codex/device', userCode: 'ABCD-1234' }),
     on: (_event, handler) => { notifications.add(handler); return () => notifications.delete(handler); },
     listModels: async () => [{ id: 'gpt-codex-a', name: 'Codex A' }],
+    readRateLimits: async () => ({ fiveHour: { usedPercent: 29, resetsAt: 1770000000 }, weekly: { usedPercent: 72, resetsAt: 1770500000 } }),
     logout: async () => {}, cancelDeviceLogin: async () => {}
   };
   const store = {
@@ -30,6 +31,8 @@ test('Codex admin endpoints expose device code and keep credentials out of setti
   t.after(async () => { await new Promise((resolve) => server.close(resolve)); await fs.rm(dataDir, { recursive: true, force: true }); });
   const base = `http://127.0.0.1:${server.address().port}/admin/api`;
   const auth = { 'x-admin-token': 'admin-secret', 'content-type': 'application/json' };
+  assert.equal((await fetch(`${base}/codex/rate-limits`, { headers: auth })).status, 404);
+  assert.equal((await fetch(`${base}/codex/rate-limits`)).status, 401);
 
   const started = await fetch(`${base}/codex/login/start`, { method: 'POST', headers: auth, body: '{}' });
   assert.equal(started.status, 200);
@@ -49,10 +52,26 @@ test('Codex admin endpoints expose device code and keep credentials out of setti
   assert.deepEqual(await modelsResponse.json(), { models: [{ id: 'gpt-codex-a', name: 'Codex A' }] });
 
   settings.codexOpenAI = { connected: true, selectedModel: '', models: [{ id: 'gpt-codex-a', name: 'Codex A' }], accessToken: 'DO-NOT-RETURN' };
+  const usageResponse = await fetch(`${base}/codex/rate-limits`, { headers: auth });
+  assert.equal(usageResponse.status, 200);
+  assert.deepEqual(await usageResponse.json(), { fiveHour: { usedPercent: 29, resetsAt: 1770000000 }, weekly: { usedPercent: 72, resetsAt: 1770500000 } });
   const settingsResponse = await fetch(`${base}/settings`, { headers: auth });
   const exposed = await settingsResponse.json();
   assert.deepEqual(exposed.codexOpenAI, { connected: true, selectedModel: '', models: [{ id: 'gpt-codex-a', name: 'Codex A' }] });
   assert.equal(JSON.stringify(exposed).includes('DO-NOT-RETURN'), false);
+});
+
+test('Codex usage endpoint returns a safe error when app-server is unavailable', async (t) => {
+  const app = createAdminApp({
+    config: { adminToken: 'test', gatewayPort: 3401, codexAppServer: { readRateLimits: async () => { throw new Error('sensitive backend diagnostic'); } } },
+    store: { getSettings: () => ({ codexOpenAI: { connected: true } }), storageStats: () => null }
+  });
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise((resolve) => server.once('listening', resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const response = await fetch(`http://127.0.0.1:${server.address().port}/admin/api/codex/rate-limits`, { headers: { 'x-admin-token': 'test' } });
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), { error: 'No se pudieron consultar los límites de Codex.' });
 });
 
 test('Codex model selection rejects IDs not present in the authorized catalog', async (t) => {
