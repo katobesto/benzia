@@ -318,6 +318,8 @@ body { font-size: 15px; }
 .app-shell { grid-template-columns: 260px minmax(0, 1fr); }
 .sidebar { width: 260px; border-right: 0; }
 .brand { height: 60px; padding: 0 21px; gap: 10px; border-bottom: 0; }
+.brand-logo { display: block; flex: 0 1 auto; width: 146px; max-width: calc(100% - 54px); max-height: 38px; height: auto; object-fit: contain; object-position: left center; }
+.brand-context { flex: 0 0 auto; color: var(--muted); font: 600 8px var(--mono); letter-spacing: .1em; }
 .brand-icon { width: 28px; height: 28px; border-radius: 50%; box-shadow: none; color: #0d2921; font: 750 15px var(--font); }
 .brand-copy { display: flex; align-items: baseline; gap: 6px; }
 .brand-copy strong { font: 650 15px var(--font); letter-spacing: -.01em; }
@@ -400,6 +402,8 @@ td strong { font-size: 12px; }
 .auth-screen::before { display: none; }
 .auth-card, .dialog-card { border-radius: 18px; background: #262626; box-shadow: 0 20px 65px rgba(0,0,0,.30); }
 .auth-brand { margin-bottom: 36px; }
+.auth-brand .brand-logo { width: 190px; max-width: calc(100% - 62px); max-height: 50px; }
+.auth-brand .brand-context { width: auto; height: auto; display: inline; border-radius: 0; background: transparent; color: var(--muted); font: 600 9px var(--font); letter-spacing: .1em; }
 .auth-brand span { width: 28px; height: 28px; border-radius: 50%; color: #0d2921; font: 750 15px var(--font); }
 .auth-brand strong { font: 650 15px var(--font); letter-spacing: -.01em; }
 .dialog-icon { border-radius: 50%; }
