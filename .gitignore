@@ -5,4 +5,9 @@ data-smoke/
 npm-debug.log*
 coverage/
 .tooling/
+.DS_Store
+logs/
+.bzharness/
+bz-harness-macos-arm64
+bz-harness-macos-arm64.config
 

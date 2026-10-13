@@ -1,0 +1,58 @@
+# bzHarness — configuración (plantilla generada en el primer arranque)
+# Rellena uno de los providers y pon default_provider. NO pongas claves aquí:
+# crea .bzharness/credentials.yaml en el workspace con:
+#   providers:
+#     benzia:
+#       api_key: PEGA_AQUI_TU_CLAVE
+
+providers:
+  benzia:
+    base_url: https://benzia.javierbenzo.com/v1
+    model: qwen3.8-27b
+    context_window: 131072
+    temperature: 1.0
+    # api_key: PEGA_AQUI_TU_CLAVE   # o en .bzharness/credentials.yaml
+
+  lmstudio:
+    base_url: http://127.0.0.1:1234/v1
+    model: modelo-local
+    context_window: 65536
+
+  ollama:
+    base_url: http://127.0.0.1:11434/v1
+    model: qwen2.5-coder:14b
+    context_window: 32768
+
+default_provider: benzia
+
+agent:
+  # 100 iteraciones y 20 llamadas consecutivas son el mínimo que admite el
+  # harness: valores menores se ignoran al cargar (F10 ajusta esto en caliente).
+  max_iterations: 100
+  max_consecutive_tools: 25
+  max_empty_turns: 3
+  auto_compact: 80
+  timeout_ms: 300000
+
+permissions:
+  read: allow
+  workspace_write: allow
+  outside_workspace: ask
+  shell_script: ask
+  shell_safe: allow
+  shell_modify: ask
+  destructive: ask
+  system: deny
+
+web:
+  search_backend: auto
+  user_agent: Mozilla/5.0 (bzHarness)
+  max_fetch_chars: 20000
+
+ui:
+  reasoning: true
+  activity_panel: true
+  compact_threshold: 80
+  mouse_tracking: true
+  verbose: false
+  theme: default
