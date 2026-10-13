@@ -4,11 +4,25 @@ import path from 'node:path';
 export const CAPABILITIES_FILENAME = 'model-capabilities.json';
 export const MAX_CAPABILITIES = 200;
 const MODALITIES = new Set(['text', 'image']);
-const QWEN38_REASONING_EFFORTS = ['low', 'medium', 'xhigh'];
+const QWEN38_REASONING_EFFORTS = ['none', 'low', 'medium', 'xhigh'];
+const REASONING_EFFORTS = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
 
-function hasQwen38Reasoning(modelId) {
+function qwen38Family(modelId) {
   const normalized = String(modelId || '').replace(/[._\s-]/g, '');
-  return /qwen38.*27b|qwen.*27b.*38|qwen38.*flashnext|qwen.*flash.*next.*38/i.test(normalized);
+  if (/qwen38.*flashnext|qwen.*flash.*next.*38/i.test(normalized)) return 'qwen38';
+  if (/qwen38.*27b|qwen.*27b.*38/i.test(normalized)) return 'qwen38';
+  if (/qwen38/i.test(normalized)) return 'qwen38';
+  return '';
+}
+
+export function reasoningEffortsForModel(modelId, capabilities = {}) {
+  const normalizedId = String(modelId || '');
+  const matchingId = Object.keys(capabilities).find((id) => normalizedId === id || normalizedId.endsWith(`/${id}`));
+  const declared = capabilities[normalizedId]?.reasoning_effort || capabilities[matchingId]?.reasoning_effort;
+  if (declared) return [...declared];
+  const family = qwen38Family(modelId);
+  if (family === 'qwen38') return [...QWEN38_REASONING_EFFORTS];
+  return [];
 }
 
 /**
@@ -16,7 +30,10 @@ function hasQwen38Reasoning(modelId) {
  *
  * Formato esperado (data/model-capabilities.json):
  * {
- *   "unsloth/qwen3.8-27b-gguf/qwen3.8-27b-ud-q4_k_s.gguf": { "input": ["text"], "output": ["text"] },
+ *   "unsloth/qwen3.8-27b-gguf/qwen3.8-27b-ud-q4_k_s.gguf": {
+ *     "input": ["text"], "output": ["text"], "context_length": 262144,
+ *     "max_completion_tokens": 32768, "reasoning_effort": ["none", "low", "medium", "xhigh"]
+ *   },
  *   "qwen2.5-vl-7b-instruct-q4_k_m.gguf": { "input": ["text", "image"] }
  * }
  *
@@ -72,6 +89,22 @@ export function sanitizeModelCapabilities(value) {
       input: normalizeModalities('modalidades de entrada', id, raw.input, ['text']),
       output: normalizeModalities('modalidades de salida', id, raw.output, ['text'])
     };
+    for (const field of ['context_length', 'max_completion_tokens']) {
+      if (raw[field] === undefined || raw[field] === null) continue;
+      if (!Number.isSafeInteger(raw[field]) || raw[field] < 1 || raw[field] > 10000000) {
+        throw new Error(`"${id}" debe declarar ${field} como un entero entre 1 y 10000000.`);
+      }
+      result[id][field] = raw[field];
+    }
+    if (raw.reasoning_effort !== undefined && raw.reasoning_effort !== null) {
+      if (!Array.isArray(raw.reasoning_effort) || raw.reasoning_effort.length === 0) {
+        throw new Error(`El esfuerzo de razonamiento de "${id}" debe ser una lista no vacía.`);
+      }
+      const efforts = [...new Set(raw.reasoning_effort)];
+      const invalid = efforts.find((effort) => !REASONING_EFFORTS.has(effort));
+      if (invalid) throw new Error(`"${id}" declara el esfuerzo no válido "${String(invalid)}".`);
+      result[id].reasoning_effort = efforts;
+    }
   }
   return result;
 }
@@ -109,19 +142,23 @@ export async function loadModelCapabilities(dataDir) {
  */
 export function annotateModel(model, capabilities = {}) {
   if (!model || typeof model !== 'object' || typeof model.id !== 'string') return model;
-  const qwenReasoning = hasQwen38Reasoning(model.id);
   let declared = capabilities[model.id];
   if (!declared && model.benzIA_provider && typeof model.benzIA_provider.id === 'string') {
     const prefix = `${model.benzIA_provider.id}/`;
     if (model.id.startsWith(prefix)) declared = capabilities[model.id.slice(prefix.length)];
   }
-  if (!declared && !qwenReasoning) return model;
+  const efforts = declared?.reasoning_effort || reasoningEffortsForModel(model.id);
+  if (!declared && !efforts.length) return model;
   return {
     ...model,
     ...(declared ? { input_modalities: [...declared.input], output_modalities: [...declared.output] } : {}),
-    ...(qwenReasoning ? {
+    ...(declared?.context_length ? { context_length: declared.context_length } : {}),
+    ...(declared?.max_completion_tokens ? { top_provider: { ...(model.top_provider && typeof model.top_provider === 'object' ? model.top_provider : {}), max_completion_tokens: declared.max_completion_tokens } } : {}),
+    ...(efforts.length ? {
+      supported_parameters: [...new Set([...(Array.isArray(model.supported_parameters) ? model.supported_parameters : []), 'reasoning_effort'])],
       benzIA_supported_parameters: {
-        reasoning_effort: { type: 'string', enum: [...QWEN38_REASONING_EFFORTS] }
+        ...(model.benzIA_supported_parameters || {}),
+        reasoning_effort: { type: 'string', enum: [...efforts] }
       }
     } : {})
   };

@@ -61,7 +61,7 @@ Cada clave de benzIA tiene un permiso independiente: **Solo proveedor local** o 
 
 ### Capacidades de modelo en `/v1/models`
 
-Los endpoints `/v1/models` de Proveedor IA Local no anuncian qué modalidades de entrada acepta cada modelo (texto, imagen…). benzIA rellena ese hueco con una referencia declarada por el operador: `data/model-capabilities.json` (vea `model-capabilities.example.json`). Cada entrada nombra el ID público del modelo — el ID original para modelos locales o `proveedor/modelo` para externos; también se acepta el ID sin prefijo — y declara `input` (modalidades de entrada; por defecto `["text"]`) y `output` (por defecto `["text"]`). Las modalidades admitidas son `text` y `image`.
+Los endpoints `/v1/models` de Proveedor IA Local no anuncian qué modalidades de entrada acepta cada modelo (texto, imagen…). benzIA rellena ese hueco con una referencia declarada por el operador: `data/model-capabilities.json` (vea `model-capabilities.example.json`). Cada entrada nombra el ID público del modelo — el ID original para modelos locales o `proveedor/modelo` para externos; también se acepta el ID sin prefijo — y puede declarar `input` (modalidades de entrada; por defecto `["text"]`), `output` (por defecto `["text"]`), los límites de contexto y salida y las opciones admitidas por el modelo. Las modalidades admitidas son `text` y `image`.
 
 ```json
 {
@@ -71,9 +71,21 @@ Los endpoints `/v1/models` de Proveedor IA Local no anuncian qué modalidades de
 }
 ```
 
-Cuando un modelo aparece en el mapa, `GET /v1/models` le añade `input_modalities` y `output_modalities`; los modelos sin declaración de modalidades no reciben esos campos. El archivo se lee en cada consulta, por lo que los cambios aplican sin reiniciar. También se puede administrar por API con `GET /admin/api/model-capabilities` y `PUT /admin/api/model-capabilities` (cuerpo `{ "capabilities": { … } }`), que valida y reescribe el archivo.
+Además de las modalidades, cada entrada puede declarar `context_length`, `max_completion_tokens` y `reasoning_effort` (lista de valores admitidos). benzIA publica el contexto con el campo común `context_length`, el máximo de salida en `top_provider.max_completion_tokens`, y los parámetros admitidos en `supported_parameters`; para describir los valores de una opción añade `benzIA_supported_parameters` con su enum. El `reasoning_effort` declarado se valida en las peticiones de inferencia y se anuncia a los clientes.
 
-benzIA anuncia además los parámetros específicos conocidos en `benzIA_supported_parameters`. Para Qwen 3.8 27B, `/v1/models` publica `reasoning_effort` como texto con los valores admitidos `low`, `medium` y `xhigh`. Los clientes pueden enviarlo en el cuerpo de una petición de inferencia, tanto en `/v1/chat/completions` como en `/v1/responses`; cualquier otro valor se rechaza con HTTP `400`.
+```json
+{
+  "unsloth/qwen3.8-27b-gguf/qwen3.8-27b-ud-q4_k_s.gguf": {
+    "input": ["text"], "output": ["text"],
+    "context_length": 262144, "max_completion_tokens": 32768,
+    "reasoning_effort": ["none", "low", "medium", "xhigh"]
+  }
+}
+```
+
+El formato de petición de Qwen 3.8 es `reasoning_effort` tanto para 27B como para Flash Next. Si el proveedor no anuncia sus opciones, benzIA publica `none`, `low`, `medium` y `xhigh` para esa familia; el valor inicial del chat es `medium`. Cuando el proveedor sí declara un enum, el chat ofrece las opciones compatibles entre `none`, `low`, `medium` y `xhigh`. El gateway rechaza valores fuera de la lista anunciada con HTTP `400`. El mapa de capacidades permite corregir o ampliar los valores para una instalación concreta.
+
+Al detectar modelos en **Utilidades → OpenCode**, benzIA usa esos mismos metadatos para completar contexto, salida y razonamiento. El generador emite el valor seleccionado en `options.reasoningEffort` y los restantes como `variants`; OpenCode traduce esa opción a `reasoning_effort` al llamar al proveedor. El archivo de capacidades se lee en cada consulta, así que los cambios aplican sin reiniciar. También se puede administrar con `GET /admin/api/model-capabilities` y `PUT /admin/api/model-capabilities` (cuerpo `{ "capabilities": { … } }`).
 
 Declarar `input: ["text"]` en un modelo que no ve es intencionado: avisa a los clientes de que no deben enviarle imágenes. Y tenga en cuenta que algunos clientes (por ejemplo DSH) resuelven las modalidades desde su propia configuración de proveedor, no desde el endpoint, así que en ellos declare además la capacidad en su fichero de configuración (p. ej. `input: [text, image]` en la definición del modelo).
 
@@ -85,7 +97,7 @@ Las conversaciones, el modelo seleccionado y el token de acceso se conservan en 
 
 El chat web usa `/v1/responses` con `store: false`: conserva el historial únicamente en el navegador y permite que Proveedor IA Local reporte los tokens reutilizados por su prompt cache. Si el proveedor no implementa Responses y devuelve un error de compatibilidad, el chat reintenta automáticamente el turno mediante `/v1/chat/completions`, con el mismo historial, adjuntos y streaming. Los clientes externos pueden seguir usando todos los endpoints OpenAI-compatible del gateway.
 
-Las respuestas se interpretan como Markdown con `marked` (GFM) y se sanean con `DOMPurify` antes de mostrarse. Se admiten encabezados, listas, enlaces, citas, tablas, tareas, código en línea y bloques de código copiables sin confiar en el HTML devuelto por el modelo.
+Las respuestas se interpretan como Markdown con `marked` (GFM) y se sanean con `DOMPurify` antes de mostrarse. Highlight.js resalta bloques SQL y de código en el navegador; cada bloque conserva su etiqueta de lenguaje y permite copiarlo. Se admiten encabezados, listas, enlaces, citas, tablas, tareas y código en línea sin confiar en el HTML devuelto por el modelo. Highlight.js se publica bajo licencia BSD-3-Clause.
 
 El compositor permite adjuntar hasta cuatro archivos mediante el selector, arrastrando o pegando imágenes. JPEG, PNG, WebP y GIF se optimizan localmente y se envían a Proveedor IA Local como contenido visual compatible con OpenAI; para interpretarlas, el modelo seleccionado debe ser multimodal o de visión. PDF, DOCX, TXT, Markdown, CSV y JSON se procesan temporalmente en memoria, se convierten a texto y se incorporan al contexto con su nombre. Los documentos admiten hasta 6 MB y 120.000 caracteres extraídos; nunca se escriben en disco. Las imágenes y el texto extraído forman parte del historial local del navegador para conservar el contexto de la conversación.
 

@@ -70,7 +70,14 @@ export function extractOpenAiModels(payload) {
     const id = typeof model?.id === 'string' ? model.id.trim() : '';
     if (!id || seen.has(id)) return [];
     seen.add(id);
-    return [{ id, name: typeof model?.name === 'string' && model.name.trim() ? model.name.trim() : id }];
+    const supportedEfforts = model?.benzIA_supported_parameters?.reasoning_effort?.enum;
+    return [{
+      id,
+      name: typeof model?.name === 'string' && model.name.trim() ? model.name.trim() : id,
+      ...(Number.isSafeInteger(model?.context_length) ? { context_length: model.context_length } : {}),
+      ...(Number.isSafeInteger(model?.top_provider?.max_completion_tokens) ? { max_completion_tokens: model.top_provider.max_completion_tokens } : {}),
+      ...(Array.isArray(supportedEfforts) ? { reasoning_effort: supportedEfforts } : {})
+    }];
   });
 }
 

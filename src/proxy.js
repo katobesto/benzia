@@ -5,7 +5,7 @@ import express from 'express';
 
 import { extractAccessToken, PAUSED_TOKEN_MESSAGE } from './access-auth.js';
 import { jsonBodyErrorHandler } from './http-errors.js';
-import { loadModelCapabilities, annotateModel } from './model-capabilities.js';
+import { loadModelCapabilities, annotateModel, reasoningEffortsForModel } from './model-capabilities.js';
 import { fetchProviderModels, routeForModel } from './providers.js';
 import { normalizeCodexModels } from './codex-provider.js';
 import { extractOutputText, extractUpstreamTelemetry, extractUsage } from './usage.js';
@@ -249,10 +249,10 @@ export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, 
     if (accessKey.pausedAt && !path.startsWith('/v1/models')) {
       return res.status(403).json(safeError(403, accessKey.pausedMessage || PAUSED_TOKEN_MESSAGE, 'access_disabled'));
     }
-    const normalizedModelId = String(body?.model || '').replace(/[._\s-]/g, '');
-    const supportsQwen38ReasoningEffort = /qwen38.*27b|qwen.*27b.*38|qwen38.*flashnext|qwen.*flash.*next.*38/i.test(normalizedModelId);
-    if (isInference && supportsQwen38ReasoningEffort && body?.reasoning_effort !== undefined && !['low', 'medium', 'xhigh'].includes(body.reasoning_effort)) {
-      const error = safeError(400, 'reasoning_effort para Qwen 3.8 debe ser low, medium o xhigh.', 'invalid_parameter');
+    const inferenceCapabilities = isInference ? await loadModelCapabilities(config.dataDir) : {};
+    const reasoningEfforts = reasoningEffortsForModel(body?.model, inferenceCapabilities);
+    if (isInference && reasoningEfforts.length && body?.reasoning_effort !== undefined && !reasoningEfforts.includes(body.reasoning_effort)) {
+      const error = safeError(400, `reasoning_effort no válido para este modelo. Valores admitidos: ${reasoningEfforts.join(', ')}.`, 'invalid_parameter');
       error.error.param = 'reasoning_effort';
       return res.status(400).json(error);
     }

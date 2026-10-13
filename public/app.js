@@ -519,8 +519,8 @@ function createOpenCodeProvider() {
 function createOpenCodeModel(initial = {}) {
   return {
     id: utilityId('model'), modelId: initial.modelId || '', name: initial.name || initial.modelId || '',
-    context: 32768, output: 8192, image: false, tools: true, role: 'small',
-    reasoningEffort: '', preserveThinking: false
+    context: initial.context_length || 32768, output: initial.max_completion_tokens || 8192, image: false, tools: true, role: 'small',
+    reasoningEffort: '', reasoningEfforts: Array.isArray(initial.reasoning_effort) ? initial.reasoning_effort : [], preserveThinking: false
   };
 }
 
@@ -586,14 +586,17 @@ function buildOpenCodeConfig() {
         output: Math.max(1, Number.parseInt(model.output, 10) || 8192)
       };
       const options = {};
+      const reasoningEfforts = Array.isArray(model.reasoningEfforts) ? model.reasoningEfforts : [];
       if (model.reasoningEffort) options.reasoningEffort = model.reasoningEffort;
+      const variants = Object.fromEntries(reasoningEfforts.filter((effort) => effort !== model.reasoningEffort).map((effort) => [effort, { reasoningEffort: effort }]));
       models[modelKey] = {
         name: model.name.trim() || model.modelId.trim(),
         tool_call: Boolean(model.tools),
         ...(model.reasoningEffort || model.preserveThinking ? { reasoning: true } : {}),
         modalities: { input: model.image ? ['text', 'image'] : ['text'], output: ['text'] },
         limit,
-        ...(Object.keys(options).length ? { options } : {})
+        ...(Object.keys(options).length ? { options } : {}),
+        ...(Object.keys(variants).length ? { variants } : {})
       };
       const ref = `${provider.id}:${model.id}`;
       references.set(ref, `${providerKey}/${modelKey}`);
@@ -673,10 +676,11 @@ function renderOpenCodeModel(model, index) {
     <div class="model-grid">
       <label>ID real del modelo<input data-model-field="modelId" value="${escapeHtml(model.modelId)}" maxlength="180" placeholder="qwen3-8b-instruct"><small>El identificador enviado al servidor.</small></label>
       <label>Nombre visible<input data-model-field="name" value="${escapeHtml(model.name)}" maxlength="120" placeholder="Qwen 3 8B"></label>
-      <label>Contexto<input data-model-field="context" type="number" min="1" max="10000000" value="${escapeHtml(model.context)}"></label>
+      <label>Contexto máximo<input data-model-field="context" type="number" min="1" max="10000000" value="${escapeHtml(model.context)}"></label>
       <label>Salida máxima<input data-model-field="output" type="number" min="1" max="10000000" value="${escapeHtml(model.output)}"></label>
       <label>Rol<select data-model-field="role"><option value="main" ${model.role === 'main' ? 'selected' : ''}>Modelo principal</option><option value="small" ${model.role === 'small' ? 'selected' : ''}>Modelo pequeño</option><option value="subagent" ${model.role === 'subagent' ? 'selected' : ''}>Para subagentes</option></select><small>«Pequeño» se emitirá como <code>small_model</code>.</small></label>
-      <label>Razonamiento <span class="optional">Opcional</span><select data-model-field="reasoningEffort"><option value="" ${!model.reasoningEffort ? 'selected' : ''}>Sin especificar</option><option value="low" ${model.reasoningEffort === 'low' ? 'selected' : ''}>Bajo</option><option value="medium" ${model.reasoningEffort === 'medium' ? 'selected' : ''}>Medio</option><option value="high" ${model.reasoningEffort === 'high' ? 'selected' : ''}>Alto</option></select></label>
+      <label>Esfuerzo predeterminado <span class="optional">Opcional</span><select data-model-field="reasoningEffort"><option value="" ${!model.reasoningEffort ? 'selected' : ''}>Sin especificar</option>${(model.reasoningEfforts || []).map((effort) => `<option value="${escapeHtml(effort)}" ${model.reasoningEffort === effort ? 'selected' : ''}>${escapeHtml(effort)}</option>`).join('')}</select></label>
+      <label class="wide-field">Esfuerzos admitidos<input data-model-field="reasoningEffortsText" value="${escapeHtml((model.reasoningEfforts || []).join(', '))}" placeholder="low, medium, high"><small>Los valores se publican como variantes de OpenCode y se envían como <code>reasoning_effort</code>.</small></label>
     </div>
     <div class="model-toggles"><label><input data-model-field="tools" type="checkbox" ${model.tools ? 'checked' : ''}> Herramientas</label><label><input data-model-field="image" type="checkbox" ${model.image ? 'checked' : ''}> Acepta imágenes</label><label><input data-model-field="preserveThinking" type="checkbox" ${model.preserveThinking ? 'checked' : ''}> Preservar razonamiento</label></div>
   </article>`;
@@ -701,7 +705,7 @@ async function queryOpenCodeModels(providerId, discover) {
     provider.status = { online: true, message: `${result.models.length} modelo(s) · ${result.latencyMs} ms` };
     if (discover) {
       const known = new Set(provider.models.map((model) => model.modelId));
-      result.models.filter((model) => !known.has(model.id)).forEach((model) => provider.models.push(createOpenCodeModel({ modelId: model.id, name: model.name })));
+      result.models.filter((model) => !known.has(model.id)).forEach((model) => provider.models.push(createOpenCodeModel({ modelId: model.id, name: model.name, context_length: model.context_length, max_completion_tokens: model.max_completion_tokens, reasoning_effort: model.reasoning_effort })));
       if (!provider.models.some((model) => model.role === 'main') && provider.models[0]) provider.models[0].role = 'main';
     }
   } catch (error) {
@@ -1110,7 +1114,12 @@ $('#opencode-providers').addEventListener('input', (event) => {
   const field = event.target.dataset.modelField || event.target.dataset.providerField;
   if (!field) return;
   const target = model || provider;
-  target[field] = event.target.type === 'checkbox' ? event.target.checked : event.target.value;
+  if (model && field === 'reasoningEffortsText') {
+    model.reasoningEfforts = [...new Set(event.target.value.split(',').map((effort) => effort.trim()).filter((effort) => ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].includes(effort)))];
+    if (model.reasoningEffort && !model.reasoningEfforts.includes(model.reasoningEffort)) model.reasoningEffort = '';
+  } else {
+    target[field] = event.target.type === 'checkbox' ? event.target.checked : event.target.value;
+  }
   $('#opencode-json').textContent = JSON.stringify(buildOpenCodeConfig().config, null, 2);
   const generated = buildOpenCodeConfig();
   $('#opencode-secret-warning').classList.toggle('hidden', !generated.hasSecret);
@@ -1121,6 +1130,12 @@ $('#opencode-providers').addEventListener('change', (event) => {
   const field = event.target.dataset.modelField || event.target.dataset.providerField;
   if (!provider || !field) return;
   const target = model || provider;
+  if (model && field === 'reasoningEffortsText') {
+    model.reasoningEfforts = [...new Set(event.target.value.split(',').map((effort) => effort.trim()).filter((effort) => ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].includes(effort)))];
+    if (model.reasoningEffort && !model.reasoningEfforts.includes(model.reasoningEffort)) model.reasoningEffort = '';
+    renderOpenCodeUtility();
+    return;
+  }
   target[field] = event.target.type === 'checkbox' ? event.target.checked : event.target.value;
   if (model && field === 'role' && model.role === 'main') {
     state.utility.providers.forEach((item) => item.models.forEach((candidate) => { if (candidate.id !== model.id) candidate.role = candidate.role === 'main' ? 'small' : candidate.role; }));

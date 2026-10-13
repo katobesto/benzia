@@ -43,6 +43,7 @@ const state = {
   endpoint: '',
   identity: null,
   models: [],
+  modelMetadata: {},
   failedModels: new Set(),
   unknownModels: new Set(),
   hideFailedModels: false,
@@ -200,15 +201,32 @@ function selectedModel() {
   return $('#model-select').value || state.models.find((model) => !state.hideFailedModels || !state.failedModels.has(model)) || '';
 }
 
-function supportsQwen38ReasoningEffort(model) {
+function supportsReasoningEffort(model) {
+  return Boolean(reasoningEffortsForModel(model).length);
+}
+
+function reasoningEffortsForModel(model) {
+  const advertised = state.modelMetadata?.[model]?.benzIA_supported_parameters?.reasoning_effort?.enum;
+  const chatEfforts = new Set(['none', 'low', 'medium', 'xhigh']);
+  if (Array.isArray(advertised) && advertised.length) return advertised.map((effort) => String(effort).toLowerCase()).filter((effort) => chatEfforts.has(effort));
   const normalized = String(model || '').replace(/[._\s-]/g, '');
-  return /qwen38.*27b|qwen.*27b.*38|qwen38.*flashnext|qwen.*flash.*next.*38/i.test(normalized);
+  if (/qwen38/i.test(normalized)) return ['none', 'low', 'medium', 'xhigh'];
+  return [];
 }
 
 function renderReasoningEffortControl() {
   const control = $('#reasoning-effort-control');
   const select = $('#reasoning-effort');
-  const visible = supportsQwen38ReasoningEffort(selectedModel());
+  const efforts = reasoningEffortsForModel(selectedModel());
+  const visible = efforts.length > 0;
+  const previous = localStorage.getItem(QWEN_REASONING_EFFORT_KEY) || select.value || '';
+  select.replaceChildren(...efforts.map((effort) => {
+    const option = document.createElement('option');
+    option.value = effort;
+    option.textContent = effort;
+    return option;
+  }));
+  select.value = efforts.includes(previous) ? previous : (efforts.includes('medium') ? 'medium' : (efforts[0] || ''));
   control.classList.toggle('hidden', !visible);
   select.disabled = !visible || state.generating || state.modelsLoading || state.modelHealthRunning;
 }
@@ -519,6 +537,10 @@ function appendMessageContent(container, text, sources = []) {
     const content = code?.textContent || '';
     const languageClass = [...(code?.classList || [])].find((name) => name.startsWith('language-'));
     const language = languageClass ? languageClass.slice(9) : 'código';
+    if (code && content.length <= 100_000 && window.hljs) {
+      const requestedLanguage = languageClass?.slice(9).toLowerCase();
+      if (!requestedLanguage || window.hljs.getLanguage(requestedLanguage)) window.hljs.highlightElement(code);
+    }
     const wrapper = document.createElement('div');
     wrapper.className = 'code-block';
     const toolbar = document.createElement('div');
@@ -1055,7 +1077,25 @@ function renderMessages({ scrollToEnd = false } = {}) {
   if (scrollToEnd) requestAnimationFrame(() => {
     const viewport = $('#conversation');
     viewport.scrollTop = messages.length ? viewport.scrollHeight : 0;
+    updateJumpToLatestButton();
   });
+  else updateJumpToLatestButton();
+}
+
+function updateJumpToLatestButton() {
+  const viewport = $('#conversation');
+  const button = $('#jump-to-latest');
+  if (!viewport || !button) return;
+  const remaining = viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop;
+  const threshold = Math.max(160, viewport.clientHeight * 0.18);
+  button.classList.toggle('hidden', viewport.scrollHeight <= viewport.clientHeight || remaining <= threshold);
+}
+
+function jumpToLatest() {
+  const viewport = $('#conversation');
+  if (!viewport) return;
+  const behavior = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
+  viewport.scrollTo({ top: viewport.scrollHeight, behavior });
 }
 
 function renderAll({ scrollToEnd = false } = {}) {
@@ -1183,7 +1223,9 @@ async function fetchModels(endpoint, token) {
   const response = await fetch(`${endpoint}/models`, { headers: { authorization: `Bearer ${token}` } });
   if (!response.ok) throw new Error(response.status === 401 ? 'El endpoint configurado ha rechazado el token.' : `No se pudieron consultar los modelos: ${await readError(response)}`);
   const payload = await response.json();
-  const models = Array.isArray(payload.data) ? payload.data.map((model) => model.id).filter(Boolean) : [];
+  const entries = Array.isArray(payload.data) ? payload.data.filter((model) => model?.id) : [];
+  state.modelMetadata = Object.fromEntries(entries.map((model) => [model.id, model]));
+  const models = entries.map((model) => model.id);
   if (!models.length) throw new Error('El endpoint está disponible, pero no devuelve ningún modelo cargado.');
   return models;
 }
@@ -1454,6 +1496,7 @@ function updatePendingMessage(conversation, content, thinking = null) {
     if (thinkingPanel) syncThinkingLine(thinkingPanel, message);
     const statsEl = article.querySelector('.message-stats');
     if (statsEl) statsEl.replaceChildren(...buildStatsDom(message).children);
+    updateJumpToLatestButton();
   }, 100);
 }
 
@@ -1567,7 +1610,7 @@ async function requestResearch(conversation) {
 }
 
 async function requestCompletion(conversation, webContext = '', useExistingPending = false) {
-  const reasoningEffort = supportsQwen38ReasoningEffort(conversation.model) ? $('#reasoning-effort').value : null;
+  const reasoningEffort = supportsReasoningEffort(conversation.model) ? $('#reasoning-effort').value : null;
   const context = conversation.messages
     .filter((message) => !message.pending && !message.error && (message.content.trim() || normalizedAttachments(message.attachments).length))
     .map((message) => ({ type: 'message', role: message.role, content: contentForResponses(message) }));
@@ -1885,6 +1928,8 @@ $('#mobile-rail').addEventListener('click', () => document.body.classList.add('r
 $('#rail-close').addEventListener('click', closeRail);
 $('#model-health-button').addEventListener('click', discardDownModels);
 $('#preview-close').addEventListener('click', closeHtmlPreview);
+$('#jump-to-latest').addEventListener('click', jumpToLatest);
+$('#conversation').addEventListener('scroll', updateJumpToLatestButton, { passive: true });
 $('#preview-overlay').addEventListener('click', (event) => {
   if (event.target === event.currentTarget) closeHtmlPreview();
 });
@@ -1897,9 +1942,6 @@ $('#model-select').addEventListener('change', (event) => {
   if (conversation && !conversation.messages.length) conversation.model = event.currentTarget.value;
   renderReasoningEffortControl();
 });
-$('#reasoning-effort').value = ['low', 'medium', 'xhigh'].includes(localStorage.getItem(QWEN_REASONING_EFFORT_KEY))
-  ? localStorage.getItem(QWEN_REASONING_EFFORT_KEY)
-  : 'xhigh';
 $('#reasoning-effort').addEventListener('change', (event) => {
   localStorage.setItem(QWEN_REASONING_EFFORT_KEY, event.currentTarget.value);
 });

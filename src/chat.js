@@ -252,6 +252,8 @@ export function createChatApp({ config, store, rateLimiter: configuredRateLimite
   });
   app.get('/vendor/marked.umd.js', (_req, res) => res.sendFile(path.join(vendorDir, 'marked/lib/marked.umd.js')));
   app.get('/vendor/purify.min.js', (_req, res) => res.sendFile(path.join(vendorDir, 'dompurify/dist/purify.min.js')));
+  app.get('/vendor/highlight.min.js', (_req, res) => res.sendFile(path.join(vendorDir, '@highlightjs/cdn-assets/highlight.min.js')));
+  app.get('/vendor/github-dark.min.css', (_req, res) => res.sendFile(path.join(vendorDir, '@highlightjs/cdn-assets/styles/github-dark.min.css')));
   app.use(express.static(chatPublicDir, { index: false, fallthrough: true }));
   app.get('/', (_req, res) => {
     res.set('cache-control', 'no-store');

@@ -19,10 +19,13 @@ test('el chat permite regenerar sustituyendo la última respuesta', () => {
 test('Qwen 3.8 27B muestra el esfuerzo y lo envía en ambos protocolos', () => {
   assert.match(html, /id="reasoning-effort-control"/);
   assert.match(html, /<span>Esfuerzo<\/span>/);
+  assert.match(html, /value="none"/);
   assert.match(html, /value="low"/);
   assert.match(html, /value="medium"/);
+  assert.match(html, /value="medium" selected/);
   assert.match(html, /value="xhigh"/);
-  assert.match(client, /function supportsQwen38ReasoningEffort/);
+  assert.match(client, /function supportsReasoningEffort/);
+  assert.match(client, /efforts\.includes\('medium'\) \? 'medium'/);
   assert.match(client, /reasoning_effort: reasoningEffort/);
   assert.match(styles, /\.reasoning-effort-control/);
   assert.match(styles, /\.reasoning-effort-control select option \{ background: #242424; color: #f2f2f2;/);
