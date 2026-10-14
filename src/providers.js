@@ -57,6 +57,7 @@ export function routeForModel(model, providers = []) {
 }
 
 const modelCatalogues = new Map();
+const localModelLimits = new Map();
 export async function fetchProviderModels(provider, options = {}) {
   if (options.cache === false) return requestProviderModels(provider, options);
   const key = JSON.stringify([provider.baseUrl, provider.apiKey || '', options.timeoutMs || 8000]);
@@ -69,7 +70,89 @@ export async function fetchProviderModels(provider, options = {}) {
     entry.models = models;
     entry.expiresAt = Date.now() + 15_000;
     return models;
-  }).catch(error => { modelCatalogues.delete(key); throw error; }).finally(() => { entry.pending = null; });
+  }).catch(error => {
+    if (modelCatalogues.get(key) === entry) modelCatalogues.delete(key);
+    throw error;
+  }).finally(() => { entry.pending = null; });
   return structuredClone(await entry.pending);
 }
-export function clearProviderModelsCache() { modelCatalogues.clear(); }
+
+/**
+ * LM Studio publica límites de contexto más completos en su API nativa que en
+ * el endpoint OpenAI-compatible /v1/models. Si la API nativa no está
+ * disponible, conserva intacto el catálogo compatible.
+ */
+async function requestLocalModelLimits(provider, timeoutMs) {
+  try {
+    const response = await fetch(`${provider.baseUrl}/api/v1/models`, {
+      headers: provider.apiKey ? { authorization: `Bearer ${provider.apiKey}` } : {},
+      redirect: 'error',
+      signal: AbortSignal.timeout(timeoutMs)
+    });
+    if (!response.ok) {
+      await response.body?.cancel();
+      return new Map();
+    }
+    const payload = await response.json().catch(() => ({}));
+    const nativeModels = Array.isArray(payload.models) ? payload.models : [];
+    return new Map(nativeModels.flatMap((model) => {
+      const id = typeof model?.key === 'string' ? model.key : model?.id;
+      if (typeof id !== 'string' || !id) return [];
+      const maxContext = Number.isSafeInteger(model.max_context_length) && model.max_context_length > 0 ? model.max_context_length : null;
+      const loadedContext = (Array.isArray(model.loaded_instances) ? model.loaded_instances : []).map((instance) => instance?.config?.context_length)
+        .find((limit) => Number.isSafeInteger(limit) && limit > 0) || null;
+      return [[id, { maxContext, loadedContext }]];
+    }));
+  } catch {
+    return new Map();
+  }
+}
+
+function fetchLocalModelLimits(provider, { timeoutMs = 750 } = {}) {
+  const key = JSON.stringify([provider.baseUrl, provider.apiKey || '', timeoutMs]);
+  let entry = localModelLimits.get(key);
+  if (entry && (entry.pending || entry.expiresAt > Date.now())) return entry.pending || Promise.resolve(entry.limits);
+  entry = { expiresAt: 0 };
+  localModelLimits.set(key, entry);
+  if (localModelLimits.size > 100) localModelLimits.delete(localModelLimits.keys().next().value);
+  entry.pending = requestLocalModelLimits(provider, timeoutMs).then((limits) => {
+    entry.limits = limits;
+    // Cache unsupported/unavailable native APIs too: they must not add a
+    // timeout to every catalogue refresh or to every concurrent chat login.
+    entry.expiresAt = Date.now() + 15_000;
+    return limits;
+  }).finally(() => { entry.pending = null; });
+  return entry.pending;
+}
+
+function applyLocalModelLimits(models, limitsById) {
+  return models.map((model) => {
+    const limits = limitsById.get(model.id);
+    if (!limits) return model;
+    return {
+      ...model,
+      ...(limits.maxContext ? { max_context_length: limits.maxContext } : {}),
+      ...((limits.maxContext || limits.loadedContext) && !model.context_length ? { context_length: limits.maxContext || limits.loadedContext } : {}),
+      ...(limits.loadedContext ? { loaded_context_length: limits.loadedContext } : {}),
+      benzIA_model_limits_source: 'LM Studio API'
+    };
+  });
+}
+
+export async function enrichLocalModelsWithLimits(provider, models, options = {}) {
+  if (!Array.isArray(models) || !models.length) return models;
+  return applyLocalModelLimits(models, await fetchLocalModelLimits(provider, options));
+}
+
+export async function fetchLocalProviderModels(provider, { timeoutMs = 8000, limitsTimeoutMs = 750 } = {}) {
+  const [models, limits] = await Promise.all([
+    fetchProviderModels(provider, { timeoutMs }),
+    fetchLocalModelLimits(provider, { timeoutMs: limitsTimeoutMs })
+  ]);
+  return applyLocalModelLimits(models, limits);
+}
+
+export function clearProviderModelsCache() {
+  modelCatalogues.clear();
+  localModelLimits.clear();
+}

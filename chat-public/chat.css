@@ -27,11 +27,11 @@ button, select { cursor: pointer; }
 body.ready .chat-shell { visibility: visible; }
 .conversation-rail { min-width: 0; height: 100vh; height: 100dvh; display: flex; flex-direction: column; background: var(--sidebar); }
 .rail-brand { height: 60px; padding: 0 14px; display: flex; align-items: center; justify-content: space-between; }
-.brand { padding: 7px 9px; display: flex; align-items: center; gap: 8px; border-radius: 8px; color: inherit; text-decoration: none; }
+.brand { padding: 7px 9px; display: flex; align-items: end; gap: 8px; border-radius: 8px; color: inherit; text-decoration: none; }
 .brand:hover { background: rgba(255,255,255,.06); }
 .brand-logo { display: block; flex: 0 1 auto; width: 142px; max-width: calc(100% - 44px); max-height: 38px; height: auto; object-fit: contain; object-position: left center; }
-.brand-context { flex: 0 0 auto; color: var(--dim); font-size: 9px; font-weight: 700; letter-spacing: .08em; }
-.brand > span, .access-brand > span { width: 28px; height: 28px; margin-right: 10px; display: grid; place-items: center; border-radius: 50%; background: var(--accent); color: #0d2921; font-size: 15px; font-weight: 750; }
+.brand-context { flex: 0 0 auto; color: white; font-size: 9px; font-weight: 700; letter-spacing: .08em; }
+.brand > span, .access-brand > span { width: 28px; height: 28px; margin-right: 10px; display: grid; place-items: center; border-radius: 50%; background: var(--accent); color: #cecece; font-size: 15px; font-weight: 750; }
 .brand > .brand-context, .access-brand > .brand-context { width: auto; height: auto; margin: 0; display: inline; border-radius: 0; background: transparent; }
 .brand strong, .access-brand strong { font-size: 15px; font-weight: 650; letter-spacing: -.01em; }
 .brand small, .access-brand small { margin-left: 6px; color: var(--dim); font-size: 10px; font-weight: 600; }
@@ -60,16 +60,18 @@ body.ready .chat-shell { visibility: visible; }
 .local-note strong { color: var(--muted); font-size: 11px; font-weight: 600; }
 .local-note span { font-size: 10px; line-height: 1.4; }
 
-.chat-stage { min-width: 0; width: 100%; height: 100vh; height: 100dvh; display: grid; grid-template-rows: 60px minmax(0,1fr) auto; overflow: hidden; }
+.chat-stage { min-width: 0; width: 100%; height: 100vh; height: 100dvh; display: grid; grid-template-rows: 68px minmax(0,1fr) auto; overflow: hidden; }
 .chat-header { padding: 0 18px; display: flex; justify-content: space-between; align-items: center; gap: 20px; }
 .header-left, .header-right { min-width: 0; display: flex; align-items: center; gap: 11px; }
 .mobile-rail { display: none; }
 .model-control { display: flex; align-items: center; gap: 7px; }
+.model-choice { min-width: 0; display: grid; grid-template-columns: auto minmax(180px,410px); align-items: center; column-gap: 7px; }
 .model-control label { color: var(--muted); font-size: 14px; font-weight: 500; }
-.model-control select { max-width: 410px; min-width: 180px; height: 38px; padding: 0 28px 0 7px; border: 0; border-radius: 8px; outline: 0; background: transparent; color: var(--text); color-scheme: dark; font-size: 15px; font-weight: 600; }
-.model-control select:hover, .model-control select:focus-visible { background: rgba(255,255,255,.06); }
-.model-control select option { background: #242424; color: #f2f2f2; font-weight: 500; }
-.model-control select option:checked { background: #355f54; color: #fff; }
+.model-choice select { max-width: 410px; min-width: 180px; height: 38px; padding: 0 28px 0 7px; border: 0; border-radius: 8px; outline: 0; background: transparent; color: var(--text); color-scheme: dark; font-size: 15px; font-weight: 600; }
+.model-choice select:hover, .model-choice select:focus-visible { background: rgba(255,255,255,.06); }
+.model-choice select option { background: #242424; color: #f2f2f2; font-weight: 500; }
+.model-choice select option:checked { background: #355f54; color: #fff; }
+.model-limit-note { grid-column: 2; min-width: 0; margin: -2px 7px 0; overflow: hidden; color: var(--dim); font: 9px/1.2 var(--mono); white-space: nowrap; text-overflow: ellipsis; }
 .model-health-button { flex: 0 0 auto; height: 34px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,.025); color: var(--muted); font-size: 11px; font-weight: 600; white-space: nowrap; transition: .15s ease; }
 .model-health-button:hover:not(:disabled) { border-color: rgba(89,220,181,.42); background: rgba(89,220,181,.09); color: var(--accent); }
 .model-health-button:disabled { cursor: wait; opacity: .55; }
@@ -344,14 +346,16 @@ kbd { padding: 1px 4px; border: 1px solid var(--line); border-radius: 4px; color
 }
 
 @media (max-width: 620px) {
-  .chat-header { height: 56px; padding: 0 max(9px,env(safe-area-inset-right)) 0 max(9px,env(safe-area-inset-left)); gap: 6px; }
-  .chat-stage { grid-template-rows: 56px minmax(0,1fr) auto; }
+  .chat-header { height: 68px; padding: 0 max(9px,env(safe-area-inset-right)) 0 max(9px,env(safe-area-inset-left)); gap: 6px; }
+  .chat-stage { grid-template-rows: 68px minmax(0,1fr) auto; }
   .header-left { flex: 1 1 auto; gap: 4px; overflow: hidden; }
   .header-right { flex: 0 0 auto; gap: 2px; }
   .icon-button { width: 44px; height: 44px; flex: 0 0 44px; }
   .model-control label { display: none; }
   .model-control { min-width: 0; flex: 1 1 auto; overflow: hidden; }
-  .model-control select { min-width: 0; width: 100%; max-width: 100%; height: 44px; flex: 1 1 auto; padding-left: 4px; font-size: 16px; text-overflow: ellipsis; }
+  .model-choice { min-width: 0; flex: 1 1 auto; grid-template-columns: minmax(0,1fr); overflow: hidden; }
+  .model-choice select { min-width: 0; width: 100%; max-width: 100%; height: 42px; padding-left: 4px; font-size: 16px; text-overflow: ellipsis; }
+  .model-limit-note { grid-column: 1; margin: -2px 4px 0; font-size: 8px; }
   .model-health-button { height: 40px; max-width: 102px; padding: 0 7px; font-size: 10px; }
   .model-health-label-long { display: none; }
   .model-health-label-short { display: inline; }

@@ -8,19 +8,44 @@ function textFromContent(content) {
   }).join(' ');
 }
 
+// Same character-based estimate for complete text and deltas, without retaining
+// the response or allocating an array containing every ASCII character.
+export class TokenEstimator {
+  constructor() { this.units = 0; this.trailingUnits = 0; }
+
+  add(value) {
+    if (!value) return;
+    const text = this.units ? String(value) : String(value).trimStart();
+    const trimmedLength = text.trimEnd().length;
+    let units = 0;
+    let trailing = 0;
+    for (let index = 0; index < text.length; index++) {
+      const weight = text.charCodeAt(index) < 128 ? 1 : 2;
+      units += weight;
+      if (index >= trimmedLength) trailing += weight;
+    }
+    this.units += units;
+    this.trailingUnits = trimmedLength ? trailing : this.trailingUnits + trailing;
+  }
+
+  get tokens() { return Math.ceil((this.units - this.trailingUnits) / 4); }
+}
+
 export function estimateTokens(text) {
-  if (!text) return 0;
-  const normalized = String(text).trim();
-  if (!normalized) return 0;
-  const asciiChars = (normalized.match(/[\x00-\x7F]/g) || []).length;
-  const nonAsciiChars = normalized.length - asciiChars;
-  return Math.max(1, Math.ceil(asciiChars / 4 + nonAsciiChars / 2));
+  const estimator = new TokenEstimator();
+  estimator.add(text);
+  return estimator.tokens;
 }
 
 export function estimateInputTokens(body = {}) {
   if (Array.isArray(body.messages)) {
-    const text = body.messages.map((message) => `${message.role || ''} ${textFromContent(message.content)}`).join('\n');
-    return estimateTokens(text) + body.messages.length * 3;
+    const estimator = new TokenEstimator();
+    for (let index = 0; index < body.messages.length; index++) {
+      const message = body.messages[index];
+      estimator.add(`${index ? '\n' : ''}${message.role || ''} `);
+      estimator.add(textFromContent(message.content));
+    }
+    return estimator.tokens + body.messages.length * 3;
   }
   if (body.prompt) return estimateTokens(Array.isArray(body.prompt) ? body.prompt.join('\n') : body.prompt);
   if (body.input) return estimateTokens(typeof body.input === 'string' ? body.input : JSON.stringify(body.input));

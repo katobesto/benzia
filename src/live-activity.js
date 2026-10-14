@@ -1,4 +1,4 @@
-import { estimateTokens } from './usage.js';
+import { TokenEstimator } from './usage.js';
 
 const roundRate = (value) => Math.round(value * 10) / 10;
 
@@ -19,7 +19,7 @@ export class LiveActivity {
       startedAt: startedAt ?? this.now(),
       firstTokenAt: null,
       lastTokenAt: null,
-      outputText: '',
+      tokenEstimator: new TokenEstimator(),
       outputTokensApprox: 0,
       samples: [],
       prefillAfter: this.prefillRateReader?.latestPrefillMarker?.() ?? null,
@@ -30,19 +30,34 @@ export class LiveActivity {
   update(id, outputText, fragment) {
     const item = this.active.get(id);
     if (!item || !outputText) return;
+    if (fragment === undefined) item.tokenEstimator = new TokenEstimator();
+    this.append(id, fragment === undefined ? outputText : fragment);
+  }
+
+  append(id, fragment) {
+    const item = this.active.get(id);
+    if (!item || !fragment) return;
+    item.tokenEstimator.add(fragment);
+    this.updateTokens(id, item.tokenEstimator.tokens);
+  }
+
+  updateTokens(id, tokens) {
+    const item = this.active.get(id);
+    if (!item) return;
     const now = this.now();
-    item.outputText = outputText;
-    if (fragment === undefined) item.outputTokensApprox = estimateTokens(outputText);
-    else {
-      item.estimatedUnits = (item.estimatedUnits || 0) + [...fragment].reduce((sum, char) => sum + (char.charCodeAt(0) < 128 ? 1 : char.length * 2), 0);
-      item.outputTokensApprox = Math.ceil(item.estimatedUnits / 4);
-    }
-    if (!item.firstTokenAt) {
+    item.outputTokensApprox = tokens;
+    if (item.firstTokenAt === null) {
       item.firstTokenAt = now;
       item.samples.push({ at: now, tokens: 0 });
     }
     item.lastTokenAt = now;
-    item.samples.push({ at: now, tokens: item.outputTokensApprox });
+    const last = item.samples.at(-1);
+    // At most one sample per 100 ms, plus the initial zero and window boundary.
+    // Fast providers can deliver thousands of deltas in a single burst.
+    if (item.samples.length > 1 && Math.floor(last.at / 100) === Math.floor(now / 100)) {
+      last.at = now;
+      last.tokens = item.outputTokensApprox;
+    } else item.samples.push({ at: now, tokens: item.outputTokensApprox });
     while (item.samples.length > 2 && item.samples[1].at < now - 5000) item.samples.shift();
   }
 
@@ -58,7 +73,7 @@ export class LiveActivity {
         const oldestSample = item.samples[0];
         const generationSeconds = oldestSample ? (now - oldestSample.at) / 1000 : 0;
         const tokensInWindow = oldestSample ? item.outputTokensApprox - oldestSample.tokens : 0;
-        const isEmitting = item.lastTokenAt && now - item.lastTokenAt < 1500;
+        const isEmitting = item.lastTokenAt !== null && now - item.lastTokenAt < 1500;
         if (!isEmitting && item.prefillTokensPerSecond === null) {
           item.prefillTokensPerSecond = this.prefillRateReader?.latestPrefillRate(item.prefillAfter ?? -Infinity) ?? null;
         }

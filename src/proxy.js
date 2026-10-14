@@ -6,9 +6,10 @@ import express from 'express';
 import { extractAccessToken, PAUSED_TOKEN_MESSAGE } from './access-auth.js';
 import { jsonBodyErrorHandler } from './http-errors.js';
 import { loadModelCapabilities, annotateModel, reasoningEffortsForModel } from './model-capabilities.js';
-import { fetchProviderModels, routeForModel } from './providers.js';
+import { fetchLocalProviderModels, fetchProviderModels, routeForModel } from './providers.js';
 import { normalizeCodexModels } from './codex-provider.js';
-import { extractOutputText, extractUpstreamTelemetry, extractUsage } from './usage.js';
+import { extractUpstreamTelemetry, extractUsage } from './usage.js';
+import { StreamMetrics } from './stream-metrics.js';
 import { RateLimiter } from './rate-limit.js';
 
 const INFERENCE_PATHS = new Set(['/v1/chat/completions', '/v1/completions', '/v1/responses', '/v1/embeddings']);
@@ -108,7 +109,13 @@ function pickResponseHeaders(headers) {
 }
 
 function writeWithBackpressure(res, chunk) {
+  if (res.destroyed || res.writableEnded) return Promise.reject(new Error('El cliente cerró la conexión.'));
   if (res.write(chunk)) return Promise.resolve();
+  return waitForDrain(res);
+}
+
+function waitForDrain(res) {
+  if (res.destroyed || res.writableEnded) return Promise.reject(new Error('El cliente cerró la conexión.'));
   return new Promise((resolve, reject) => {
     const cleanup = () => {
       res.off('drain', onDrain);
@@ -132,16 +139,33 @@ async function recordMetricSafely(store, metric) {
   }
 }
 
-function parseSseBuffer(buffer, onPayload) {
-  const lines = buffer.split(/\r?\n/);
-  const remainder = lines.pop() || '';
-  for (const line of lines) {
-    if (!line.startsWith('data:')) continue;
-    const data = line.slice(5).trim();
-    if (!data || data === '[DONE]') continue;
-    try { onPayload(JSON.parse(data)); } catch { /* Un fragmento no JSON se reenvía igualmente. */ }
-  }
-  return remainder;
+function isEventStream(response, requestedStream) {
+  if (!requestedStream || !response.body) return false;
+  const type = response.headers.get('content-type')?.split(';')[0].trim().toLowerCase();
+  return type === 'text/event-stream' || (response.ok && (!type || type === 'text/plain' || type === 'application/octet-stream'));
+}
+
+function withoutStreamUsage(body) {
+  const result = { ...body, stream_options: { ...body.stream_options } };
+  delete result.stream_options.include_usage;
+  if (!Object.keys(result.stream_options).length) delete result.stream_options;
+  return result;
+}
+
+function rejectsStreamUsage(buffer) {
+  const mentionsOption = (value) => /\b(?:stream_options|include_usage)\b/i.test(value || '');
+  try {
+    const payload = JSON.parse(buffer.toString('utf8'));
+    if (typeof payload === 'string') return mentionsOption(payload);
+    const error = payload?.error ?? payload;
+    if (typeof error === 'string') return mentionsOption(error);
+    // Inspect error fields, not an echoed request that happens to contain the
+    // option. Pydantic-style validation errors expose the parameter in loc.
+    return [error?.message, error?.param, typeof payload?.detail === 'string' ? payload.detail : '']
+      .some((value) => typeof value === 'string' && mentionsOption(value)) ||
+      (Array.isArray(payload?.detail) && payload.detail.some((issue) =>
+        mentionsOption(issue?.msg) || (Array.isArray(issue?.loc) && issue.loc.some((part) => mentionsOption(part)))));
+  } catch { return mentionsOption(buffer.toString('utf8')); }
 }
 
 export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, liveActivity, rateLimiter: providedRateLimiter }) {
@@ -149,12 +173,16 @@ export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, 
   app.disable('x-powered-by');
   if (config.trustCloudflareProxy) app.set('trust proxy', 1);
   const rateLimiter = providedRateLimiter || new RateLimiter({ limit: config.rateLimitAuthPerMinute || 20 });
+  // A successful compatibility retry is remembered per origin/credential/model.
+  // A bounded TTL lets upgraded providers advertise usage again automatically.
+  const unsupportedStreamUsage = new Map();
   const logLimit = (event) => {
     console.warn(`[seguridad] rate limit activado ${JSON.stringify(event)}`);
     try { store.recordSecurityEvent?.(event); } catch (error) { console.error('No se pudo guardar el evento de seguridad:', error); }
   };
-  app.use(cors({ origin: true, credentials: false }));
+  app.use(cors({ origin: true, credentials: false, exposedHeaders: ['Server-Timing', 'X-LM-Gateway-Request-Id'] }));
   app.use((req, _res, next) => {
+    req.gatewayStartedAt = Date.now();
     req.rateLimitAddress = config.trustCloudflareProxy
       ? (req.get('cf-connecting-ip') || req.ip || req.socket?.remoteAddress || 'unknown')
       : (req.socket?.remoteAddress || 'unknown');
@@ -205,7 +233,7 @@ export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, 
   };
 
   app.use(async (req, res) => {
-    const startedAt = Date.now();
+    const startedAt = req.gatewayStartedAt ?? Date.now();
     const requestId = crypto.randomUUID();
     const token = extractAccessToken(req);
     const accessKey = store.findKeyByToken(token, { includeInactive: true });
@@ -242,19 +270,23 @@ export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, 
       const stats = store.getKeyStats(accessKey.id) || {};
       return res.json({ object: 'user_stats', ...stats, tokens_consumed: stats.consumedTokens, tokens_available: stats.availableTokens, percentage_used: stats.usagePercent, uncached_input_tokens: stats.uncachedInputTokens, tokens_saved_by_cache: stats.cachedTokens, cache_tokens_saved: stats.cachedTokens, cache_percentage: stats.cachePercent, percentage_cache: stats.cachePercent });
     }
-    const body = req.body && Object.keys(req.body).length ? structuredClone(req.body) : undefined;
+    // Only top-level routing/budget fields are changed. Messages, images and
+    // tools can be large and are read-only; avoid copying them twice.
+    const body = req.body && Object.keys(req.body).length ? { ...req.body } : undefined;
     const isStream = Boolean(body?.stream);
     const isInference = req.method === 'POST' && INFERENCE_PATHS.has(path);
     if (accessKey.pausedAt && isInference) return sendPausedInference(res, path, body, accessKey.pausedMessage || PAUSED_TOKEN_MESSAGE);
     if (accessKey.pausedAt && !path.startsWith('/v1/models')) {
       return res.status(403).json(safeError(403, accessKey.pausedMessage || PAUSED_TOKEN_MESSAGE, 'access_disabled'));
     }
-    const inferenceCapabilities = isInference ? await loadModelCapabilities(config.dataDir) : {};
-    const reasoningEfforts = reasoningEffortsForModel(body?.model, inferenceCapabilities);
-    if (isInference && reasoningEfforts.length && body?.reasoning_effort !== undefined && !reasoningEfforts.includes(body.reasoning_effort)) {
-      const error = safeError(400, `reasoning_effort no válido para este modelo. Valores admitidos: ${reasoningEfforts.join(', ')}.`, 'invalid_parameter');
-      error.error.param = 'reasoning_effort';
-      return res.status(400).json(error);
+    if (isInference && body?.reasoning_effort !== undefined) {
+      const inferenceCapabilities = await loadModelCapabilities(config.dataDir);
+      const reasoningEfforts = reasoningEffortsForModel(body.model, inferenceCapabilities);
+      if (reasoningEfforts.length && !reasoningEfforts.includes(body.reasoning_effort)) {
+        const error = safeError(400, `reasoning_effort no válido para este modelo. Valores admitidos: ${reasoningEfforts.join(', ')}.`, 'invalid_parameter');
+        error.error.param = 'reasoning_effort';
+        return res.status(400).json(error);
+      }
     }
     if (isInference && accessKey.tokenLimit != null) {
       const remaining = Math.max(0, Number(accessKey.tokenLimit) - Number(accessKey.consumedTokens || 0));
@@ -275,7 +307,7 @@ export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, 
         ? normalizeCodexModels(settings.codexOpenAI.models || [], settings.codexOpenAI.selectedModel)
         : [];
       const results = await Promise.allSettled([
-        fetchProviderModels(localProvider, { timeoutMs: Math.min(config.requestTimeoutMs, 8000) }),
+        fetchLocalProviderModels(localProvider, { timeoutMs: Math.min(config.requestTimeoutMs, 8000), limitsTimeoutMs: Math.min(config.requestTimeoutMs, 750) }),
         ...providers.map((provider) => fetchProviderModels(provider, { timeoutMs: Math.min(config.requestTimeoutMs, EXTERNAL_MODELS_TIMEOUT_MS) }))
       ]);
       const hasAnyModelsResponse = results.some((result) => result.status === 'fulfilled');
@@ -312,10 +344,16 @@ export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, 
       id: 'local', name: 'Proveedor IA Local', baseUrl: settings.upstreamBaseUrl, apiKey: settings.upstreamApiKey
     };
     const upstreamUrl = codexRoute ? '' : `${selectedProvider.baseUrl}${req.originalUrl}`;
-    const upstreamBody = body ? structuredClone(body) : undefined;
+    let upstreamBody = body ? { ...body } : undefined;
     if (externalRoute && upstreamBody) upstreamBody.model = externalRoute.upstreamModel;
-    if (upstreamBody?.stream && path === '/v1/chat/completions') {
+    const usageCompatibilityKey = JSON.stringify([selectedProvider.baseUrl, selectedProvider.apiKey || '', upstreamBody?.model]);
+    const incompatibleUntil = unsupportedStreamUsage.get(usageCompatibilityKey) || 0;
+    if (incompatibleUntil && incompatibleUntil <= Date.now()) unsupportedStreamUsage.delete(usageCompatibilityKey);
+    const requestStreamUsage = upstreamBody?.stream && path === '/v1/chat/completions' &&
+      (upstreamBody.stream_options?.include_usage === undefined || upstreamBody.stream_options.include_usage === true);
+    if (requestStreamUsage) {
       upstreamBody.stream_options = { ...upstreamBody.stream_options, include_usage: true };
+      if (incompatibleUntil > Date.now()) upstreamBody = withoutStreamUsage(upstreamBody);
     }
     const controller = new AbortController();
     let timedOut = false;
@@ -345,6 +383,7 @@ export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, 
     };
     req.once('aborted', onRequestAborted);
     res.once('close', onResponseClosed);
+    if (req.aborted || res.destroyed) onRequestAborted();
     const cleanupRequest = () => {
       clearUpstreamTimeout();
       releaseInference();
@@ -366,20 +405,25 @@ export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, 
     }
 
     let upstream;
+    let bufferedResponse;
+    const requestTimings = { gatewayPreparationMs: Date.now() - startedAt, queueWaitMs: 0, upstreamHeadersMs: null };
     let releaseInference = () => {};
     try {
       if (isInference && config.inferenceAdmission) {
         clearUpstreamTimeout();
-        releaseInference = await config.inferenceAdmission.acquire(selectedProvider.baseUrl, controller.signal);
+        const queuedAt = Date.now();
+        try { releaseInference = await config.inferenceAdmission.acquire(selectedProvider.baseUrl, controller.signal); }
+        finally { requestTimings.queueWaitMs = Date.now() - queuedAt; }
         startUpstreamTimeout();
       }
       if (codexRoute) {
         const completionId = `chatcmpl-${crypto.randomUUID().replaceAll('-', '')}`;
         const created = Math.floor(Date.now() / 1000);
-        let streamedText = '';
+        let emittedDelta = false;
+        let firstTokenAt = null;
         const emitDelta = async (delta) => {
-          streamedText += delta;
-          if (trackLive) liveActivity?.update(requestId, streamedText, delta);
+          if (delta) { emittedDelta = true; firstTokenAt ??= Date.now(); }
+          if (trackLive) liveActivity?.append(requestId, delta);
           const chunk = { id: completionId, object: 'chat.completion.chunk', created, model: body.model, choices: [{ index: 0, delta: { content: delta }, finish_reason: null }] };
           await writeWithBackpressure(res, `data: ${JSON.stringify(chunk)}${String.fromCharCode(10, 10)}`);
         };
@@ -394,22 +438,23 @@ export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, 
         const completedAt = Date.now();
         const outputTokens = Math.max(0, Math.ceil(content.length / 4));
         const usage = { inputTokens: 0, outputTokens, usageSource: 'estimated', lmCachedInputTokens: null, lmCacheSource: 'unavailable' };
-        const telemetry = extractUpstreamTelemetry({}, { outputTokens, startedAt, completedAt });
-        await recordMetricSafely(store, { id: requestId, at: new Date().toISOString(), keyId: accessKey.id, path, model: body?.model || null, provider: 'openai', status: 200, latencyMs: completedAt - startedAt, ...usage, ...telemetry, stream: isStream });
+        const telemetry = extractUpstreamTelemetry({}, { outputTokens, startedAt, firstTokenAt, completedAt });
         if (trackLive) liveActivity?.finish(requestId);
         if (isStream) {
           // Headers were flushed before starting Codex so deltas reach clients immediately.
-          const chunks = streamedText ? [] : (content.match(/.{1,40}/gs) || ['']);
+          const chunks = emittedDelta ? [] : [content];
           for (const chunk of chunks) await writeWithBackpressure(res, `data: ${JSON.stringify({ id: completionId, object: 'chat.completion.chunk', created: Math.floor(completedAt / 1000), model: body.model, choices: [{ index: 0, delta: { content: chunk }, finish_reason: null }] })}\n\n`);
           await writeWithBackpressure(res, `data: ${JSON.stringify({ id: completionId, object: 'chat.completion.chunk', created: Math.floor(completedAt / 1000), model: body.model, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`);
-          return res.end();
-        }
-        return res.status(200).json({ id: completionId, object: 'chat.completion', created: Math.floor(completedAt / 1000), model: body.model, choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' }], usage: { prompt_tokens: 0, completion_tokens: outputTokens, total_tokens: outputTokens } });
+          res.end();
+        } else res.status(200).json({ id: completionId, object: 'chat.completion', created: Math.floor(completedAt / 1000), model: body.model, choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' }], usage: { prompt_tokens: 0, completion_tokens: outputTokens, total_tokens: outputTokens } });
+        await recordMetricSafely(store, { id: requestId, at: new Date().toISOString(), keyId: accessKey.id, path, model: body?.model || null, provider: 'openai', status: 200, latencyMs: completedAt - startedAt, ...usage, ...telemetry, ...requestTimings, stream: isStream });
+        return;
       }
       const requestUpstream = (requestBody) => fetch(upstreamUrl, {
         method: req.method,
         headers: {
-          accept: req.get('accept') || '*/*',
+          accept: req.get('accept') || (isStream ? 'text/event-stream' : '*/*'),
+          ...(isStream ? { 'accept-encoding': 'identity' } : {}),
           ...(requestBody ? { 'content-type': 'application/json' } : {}),
           ...(selectedProvider.apiKey ? { authorization: `Bearer ${selectedProvider.apiKey}` } : {}),
           // Algunos servidores OpenAI-compatibles responden 404 a /responses
@@ -421,26 +466,33 @@ export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, 
         body: requestBody ? JSON.stringify(requestBody) : undefined,
         signal: controller.signal
       });
+      const upstreamStartedAt = Date.now();
       upstream = await requestUpstream(upstreamBody);
-      clearUpstreamTimeout();
       // `stream_options.include_usage` es OpenAI-compatible, pero no todos los
       // servidores que implementan chat/completions lo reconocen todavía.
       // Reintentar sin esa extensión conserva la compatibilidad; en ese caso
       // benzIA estima el uso si el upstream no lo publica de otra forma.
-      if (upstream.status === 400 && path === '/v1/chat/completions' && upstreamBody?.stream_options?.include_usage) {
-        await upstream.body?.cancel();
-        const compatibleBody = structuredClone(upstreamBody);
-        delete compatibleBody.stream_options;
-        timedOut = false;
-        // Re-establish a fresh connection timeout for the compatibility retry.
-        startUpstreamTimeout();
-        upstream = await requestUpstream(compatibleBody);
-        clearUpstreamTimeout();
+      if ((upstream.status === 400 || upstream.status === 422) && requestStreamUsage && upstreamBody.stream_options?.include_usage === true) {
+        // Inspect under the request timeout and reuse the bytes if this is an
+        // unrelated error. Never repeat an invalid prompt/context request.
+        bufferedResponse = Buffer.from(await upstream.arrayBuffer());
+        if (rejectsStreamUsage(bufferedResponse)) {
+          const compatibleBody = withoutStreamUsage(upstreamBody);
+          startUpstreamTimeout();
+          upstream = await requestUpstream(compatibleBody);
+          bufferedResponse = undefined;
+          if (upstream.ok) {
+            unsupportedStreamUsage.set(usageCompatibilityKey, Date.now() + 300_000);
+            if (unsupportedStreamUsage.size > 200) unsupportedStreamUsage.delete(unsupportedStreamUsage.keys().next().value);
+          }
+        }
       }
+      requestTimings.upstreamHeadersMs = Date.now() - upstreamStartedAt;
+      clearUpstreamTimeout();
       // Non-streaming responses still need a bounded body read. A streaming
       // response, however, remains open across arbitrary provider/network
       // pauses until it finishes or the client disconnects.
-      if (!isStream) startUpstreamTimeout();
+      if (!isEventStream(upstream, isStream)) startUpstreamTimeout();
     } catch (error) {
       if (error.status === 429) { admissionRejected = true; res.set('Retry-After', '5'); }
       cleanupRequest();
@@ -457,7 +509,7 @@ export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, 
         inputTokens: 0, outputTokens: 0, usageSource: 'unavailable',
         lmCachedInputTokens: null, lmCacheSource: 'unavailable',
         tokensPerSecond: null, throughputSource: 'unavailable',
-        telemetryVersion: 2,
+        telemetryVersion: 2, ...requestTimings,
         generationDurationMs: null, timeToFirstTokenMs: null,
         stream: isStream
       });
@@ -474,50 +526,39 @@ export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, 
 
     const responseHeaders = pickResponseHeaders(upstream.headers);
     res.status(upstream.status);
-    res.set({ ...responseHeaders, 'x-lm-gateway-request-id': requestId });
+    res.set({
+      ...responseHeaders,
+      'x-lm-gateway-request-id': requestId,
+      'server-timing': `gateway_prepare;dur=${requestTimings.gatewayPreparationMs}, queue;dur=${requestTimings.queueWaitMs}, upstream_headers;dur=${requestTimings.upstreamHeadersMs}`
+    });
 
-    if (isStream && upstream.body) {
+    if (isEventStream(upstream, isStream) && bufferedResponse === undefined) {
       res.removeHeader('content-length');
-      res.set({ 'cache-control': 'no-cache, no-transform', 'x-accel-buffering': 'no' });
+      res.set({ 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache, no-transform', 'x-accel-buffering': 'no' });
       res.flushHeaders?.();
       const reader = upstream.body.getReader();
       const cancelUpstream = () => { void reader.cancel().catch(() => {}); };
       controller.signal.addEventListener('abort', cancelUpstream, { once: true });
       if (controller.signal.aborted) cancelUpstream();
-      const decoder = new TextDecoder();
-      let sseBuffer = '';
-      let lastPayload = {};
-      let outputText = '';
-      let firstTokenAt = null;
+      const streamMetrics = new StreamMetrics({ onFragment: (_fragment, tokens) => liveActivity?.updateTokens(requestId, tokens) });
       let streamError = null;
       try {
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
-          await writeWithBackpressure(res, Buffer.from(value));
-          sseBuffer += decoder.decode(value, { stream: true });
-          sseBuffer = parseSseBuffer(sseBuffer, (payload) => {
-            lastPayload = payload;
-            const fragment = extractOutputText(payload);
-            if (fragment) {
-              firstTokenAt ||= Date.now();
-              outputText += fragment;
-              liveActivity?.update(requestId, outputText, fragment);
-            }
-          });
+          controller.signal.throwIfAborted();
+          // Node accepts Uint8Array directly. Await only when the downstream
+          // buffer is full; avoid a byte copy and an extra promise per chunk.
+          const needsDrain = !res.write(value);
+          streamMetrics.write(value);
+          if (needsDrain) await waitForDrain(res);
         }
-        parseSseBuffer(`${sseBuffer}${decoder.decode()}\n`, (payload) => {
-          lastPayload = payload;
-          const fragment = extractOutputText(payload);
-          if (fragment) {
-            firstTokenAt ||= Date.now();
-            outputText += fragment;
-            liveActivity?.update(requestId, outputText, fragment);
-          }
-        });
+        controller.signal.throwIfAborted();
+        streamMetrics.end();
         res.end();
       } catch (error) {
         streamError = error;
+        controller.abort(error);
         if (!clientDisconnected && !res.writableEnded) {
           const status = failureStatus();
           const message = timedOut
@@ -531,12 +572,14 @@ export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, 
       }
       cleanupRequest();
       controller.signal.removeEventListener('abort', cancelUpstream);
+      reader.releaseLock();
       const completedAt = Date.now();
-      const usage = extractUsage(lastPayload, body, outputText);
-      const telemetry = extractUpstreamTelemetry(lastPayload, {
+      const usage = extractUsage(streamMetrics.payload, body);
+      if (usage.usageSource === 'estimated') usage.outputTokens = streamMetrics.estimator.tokens;
+      const telemetry = extractUpstreamTelemetry(streamMetrics.payload, {
         outputTokens: usage.outputTokens,
         startedAt,
-        firstTokenAt,
+        firstTokenAt: streamMetrics.firstTokenAt,
         completedAt
       });
       liveActivity?.finish(requestId);
@@ -544,7 +587,7 @@ export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, 
         id: requestId, at: new Date().toISOString(), keyId: accessKey.id, path,
         model: body?.model || null, provider: selectedProvider.id,
         status: streamError ? failureStatus() : upstream.status, latencyMs: completedAt - startedAt,
-        ...usage, ...telemetry, stream: true
+        ...usage, ...telemetry, ...requestTimings, stream: true
       });
       return;
     }
@@ -552,7 +595,7 @@ export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, 
     if (trackLive) liveActivity?.finish(requestId);
     let responseBuffer;
     try {
-      responseBuffer = Buffer.from(await upstream.arrayBuffer());
+      responseBuffer = bufferedResponse ?? Buffer.from(await upstream.arrayBuffer());
     } catch (error) {
       if (error.status === 429) { admissionRejected = true; res.set('Retry-After', '5'); }
       cleanupRequest();
@@ -562,7 +605,7 @@ export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, 
         model: body?.model || null, provider: selectedProvider.id, status, latencyMs: Date.now() - startedAt,
         inputTokens: 0, outputTokens: 0, usageSource: 'unavailable',
         lmCachedInputTokens: null, lmCacheSource: 'unavailable',
-        tokensPerSecond: null, throughputSource: 'unavailable', telemetryVersion: 2,
+        tokensPerSecond: null, throughputSource: 'unavailable', telemetryVersion: 2, ...requestTimings,
         generationDurationMs: null, timeToFirstTokenMs: null, stream: false
       });
       if (clientDisconnected || res.headersSent) return;
@@ -584,7 +627,7 @@ export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, 
     await recordMetricSafely(store, {
       id: requestId, at: new Date().toISOString(), keyId: accessKey.id, path,
       model: body?.model || null, provider: selectedProvider.id, status: upstream.status, latencyMs: Date.now() - startedAt,
-      ...usage, ...telemetry, stream: false
+      ...usage, ...telemetry, ...requestTimings, stream: false
     });
   });
 

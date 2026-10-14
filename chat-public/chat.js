@@ -11,6 +11,7 @@ const MAX_IMAGE_SOURCE_BYTES = 10 * 1024 * 1024;
 const MAX_IMAGE_STORED_BYTES = 1_300_000;
 const MAX_DOCUMENT_CHARS = 120_000;
 const MAX_CUSTOM_INSTRUCTIONS = 2000;
+const DEFAULT_MAX_OUTPUT_TOKENS = 32768;
 let pendingMarkdownFrame = 0;
 let previewAttempt = 0;
 
@@ -199,6 +200,54 @@ function activeConversation() {
 
 function selectedModel() {
   return $('#model-select').value || state.models.find((model) => !state.hideFailedModels || !state.failedModels.has(model)) || '';
+}
+
+function positiveTokenLimit(value) {
+  const limit = Number(value);
+  return Number.isSafeInteger(limit) && limit > 0 ? limit : null;
+}
+
+function modelTokenLimits(modelId = selectedModel()) {
+  const metadata = state.modelMetadata?.[modelId] || {};
+  const contextLength = positiveTokenLimit(metadata.max_context_length ?? metadata.context_length ?? metadata.loaded_context_length ?? metadata.context_window ?? metadata.max_context_tokens ?? metadata.limits?.context_length);
+  const outputLimit = positiveTokenLimit(metadata.top_provider?.max_completion_tokens ?? metadata.top_provider?.max_output_tokens ?? metadata.max_completion_tokens ?? metadata.max_output_tokens ?? metadata.limits?.max_output_tokens);
+  return { contextLength, outputLimit };
+}
+
+function outputTokenBudget(modelId = selectedModel()) {
+  const { outputLimit } = modelTokenLimits(modelId);
+  return outputLimit ? Math.min(DEFAULT_MAX_OUTPUT_TOKENS, outputLimit) : DEFAULT_MAX_OUTPUT_TOKENS;
+}
+
+function compactTokenCount(value) {
+  if (!Number.isFinite(value) || value <= 0) return 'n/d';
+  if (value >= 1_000_000) return `${Math.round(value / 100_000) / 10}M`;
+  if (value >= 10_000) return `${Math.floor(value / 1000)}k`;
+  if (value >= 1000) return `${Math.round(value / 100) / 10}k`;
+  return formatCount(value);
+}
+
+function renderModelTokenLimits() {
+  const note = $('#model-limit-note');
+  if (!note) return;
+  const model = selectedModel();
+  if (!model) {
+    note.textContent = 'Límites del modelo no disponibles';
+    note.title = 'Conecta el chat para consultar los límites publicados por el proveedor.';
+    return;
+  }
+  if (/^openai\//i.test(model)) {
+    note.textContent = 'Contexto n/d · salida no configurable';
+    note.title = 'La integración OpenAI Codex mediante app-server no expone un límite de salida configurable.';
+    return;
+  }
+  const metadata = state.modelMetadata?.[model] || {};
+  const { contextLength, outputLimit } = modelTokenLimits(model);
+  const requested = outputTokenBudget(model);
+  note.textContent = `Contexto ${compactTokenCount(contextLength)} · salida máx. ${compactTokenCount(outputLimit)} · petición ${compactTokenCount(requested)}`;
+  const source = metadata.benzIA_model_limits_source ? ` Fuente: ${metadata.benzIA_model_limits_source}.` : '';
+  const loadedContext = positiveTokenLimit(metadata.loaded_context_length);
+  note.title = `Contexto máximo: ${contextLength ? `${formatCount(contextLength)} tokens` : 'el proveedor no lo publica'}${loadedContext ? `. Contexto cargado: ${formatCount(loadedContext)} tokens` : ''}. Salida máxima: ${outputLimit ? `${formatCount(outputLimit)} tokens` : 'el proveedor no la publica'}. benzIA solicitará hasta ${formatCount(requested)} tokens de salida.${source}`;
 }
 
 function supportsReasoningEffort(model) {
@@ -1103,6 +1152,7 @@ function renderAll({ scrollToEnd = false } = {}) {
   renderMessages({ scrollToEnd });
   renderInstructionsControl();
   renderReasoningEffortControl();
+  renderModelTokenLimits();
 }
 
 function setConnection(kind, label) {
@@ -1254,6 +1304,7 @@ function populateModels() {
   select.value = visibleModels.includes(remembered) ? remembered : (visibleModels[0] || '');
   if (select.value) localStorage.setItem(MODEL_KEY, select.value);
   renderReasoningEffortControl();
+  renderModelTokenLimits();
   updateModelHealthButton();
 }
 
@@ -1644,6 +1695,7 @@ async function requestCompletion(conversation, webContext = '', useExistingPendi
     const chatCompletionsBody = {
       model: conversation.model,
       messages: messagesForChatCompletions(conversation, webContext),
+      max_tokens: outputTokenBudget(conversation.model),
       stream: true,
       stream_options: { include_usage: true },
       ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {})
@@ -1667,7 +1719,7 @@ async function requestCompletion(conversation, webContext = '', useExistingPendi
       response = await fetch(`${state.endpoint}/responses`, {
         method: 'POST',
         headers: { authorization: `Bearer ${state.token}`, 'content-type': 'application/json' },
-        body: JSON.stringify({ model: conversation.model, input: context, stream: true, store: false, ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}) }),
+        body: JSON.stringify({ model: conversation.model, input: context, max_output_tokens: outputTokenBudget(conversation.model), stream: true, store: false, ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}) }),
         signal: state.controller.signal
       });
       protocol = 'responses';
@@ -1941,6 +1993,7 @@ $('#model-select').addEventListener('change', (event) => {
   const conversation = activeConversation();
   if (conversation && !conversation.messages.length) conversation.model = event.currentTarget.value;
   renderReasoningEffortControl();
+  renderModelTokenLimits();
 });
 $('#reasoning-effort').addEventListener('change', (event) => {
   localStorage.setItem(QWEN_REASONING_EFFORT_KEY, event.currentTarget.value);

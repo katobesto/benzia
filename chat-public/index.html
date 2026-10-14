@@ -6,7 +6,7 @@
   <meta name="color-scheme" content="dark">
   <meta name="description" content="Chat privado para probar los modelos servidos por benzIA.">
   <title>benzIA Chat</title>
-  <link rel="stylesheet" href="/chat/chat.css?v=15">
+  <link rel="stylesheet" href="/chat/chat.css?v=17">
   <link rel="stylesheet" href="/chat/vendor/github-dark.min.css?v=13">
 </head>
 <body>
@@ -27,8 +27,11 @@
         <div class="header-left">
           <button class="icon-button mobile-rail" id="mobile-rail" type="button" aria-label="Abrir conversaciones">☰</button>
           <div class="model-control">
-            <label for="model-select">Modelo</label>
-            <select id="model-select" aria-label="Modelo activo"></select>
+            <div class="model-choice">
+              <label for="model-select">Modelo</label>
+              <select id="model-select" aria-label="Modelo activo"></select>
+              <small class="model-limit-note" id="model-limit-note" aria-live="polite" title="Los límites se muestran cuando el proveedor los publica en su API.">Cargando límites del modelo…</small>
+            </div>
             <button class="model-health-button" id="model-health-button" type="button" aria-label="Descartar modelos caídos" title="Prueba cada modelo con una petición mínima (máximo 1 token). Puede consumir cuota del proveedor.">
               <span class="model-health-label-long">Descartar modelos caídos</span>
               <span class="model-health-label-short">Descartar caídos</span>
@@ -142,10 +145,10 @@
   </div>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
-  <script src="/chat/vendor/purify.min.js?v=15" defer></script>
-  <script src="/chat/vendor/marked.umd.js?v=15" defer></script>
-  <script src="/chat/vendor/highlight.min.js?v=15" defer></script>
-  <script src="/chat/model-health.js?v=15" defer></script>
-  <script src="/chat/chat.js?v=15" defer></script>
+  <script src="/chat/vendor/purify.min.js?v=17" defer></script>
+  <script src="/chat/vendor/marked.umd.js?v=17" defer></script>
+  <script src="/chat/vendor/highlight.min.js?v=17" defer></script>
+  <script src="/chat/model-health.js?v=17" defer></script>
+  <script src="/chat/chat.js?v=17" defer></script>
 </body>
 </html>

@@ -113,6 +113,8 @@ Al usar el botón **Web**, el chat inicia una investigación visible: el backend
 
 ## Métricas y caché del proveedor
 
+El [análisis del flujo y rendimiento del proxy](docs/proxy-performance.md) describe las optimizaciones, los límites del streaming y los tiempos de preparación, cola y proveedor disponibles en `Server-Timing` y en las métricas.
+
 - Cuando Proveedor IA Local entrega `usage`, benzIA conserva sus contadores exactos.
 - Si no entrega `usage`, se usa una estimación y la traza queda marcada internamente como `estimated`.
 - En streaming se solicita `stream_options.include_usage`, se reenvía el SSE sin esperar a que termine y se registra el bloque final de uso/estadísticas.
