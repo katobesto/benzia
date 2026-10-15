@@ -15,6 +15,8 @@ import { jsonBodyErrorHandler } from './http-errors.js';
 import { normalizeCodexModels } from './codex-provider.js';
 
 const publicDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../public');
+const DEFAULT_BRANDING = Object.freeze({ name: 'benzIA', logoDataUrl: null });
+const MAX_BRANDING_LOGO_CHARS = 850_000;
 
 const validName = (value) => typeof value === 'string' && value.trim().length >= 2 && value.trim().length <= 80;
 const validPausedMessage = (value) => value === undefined || value === null || (typeof value === 'string' && value.trim().length <= 500);
@@ -33,6 +35,31 @@ function hasServerSession(req, adminToken) {
   const candidate = Buffer.from(readCookie(req, SERVER_SESSION_COOKIE));
   const expected = Buffer.from(serverSessionValue(adminToken));
   return candidate.length === expected.length && crypto.timingSafeEqual(candidate, expected);
+}
+
+function sanitizeBranding(value, previous = DEFAULT_BRANDING) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('La configuración de branding no es válida.');
+  const name = value.name === undefined ? previous.name : value.name;
+  if (typeof name !== 'string' || !name.trim() || name.trim().length > 60) {
+    throw new Error('El nombre visible debe tener entre 1 y 60 caracteres.');
+  }
+  let logoDataUrl = previous.logoDataUrl || null;
+  if ('logoDataUrl' in value) {
+    if (value.logoDataUrl === null || value.logoDataUrl === '') logoDataUrl = null;
+    else {
+      const match = typeof value.logoDataUrl === 'string'
+        && value.logoDataUrl.match(/^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/]+={0,2})$/);
+      if (!match || value.logoDataUrl.length > MAX_BRANDING_LOGO_CHARS) throw new Error('El logotipo debe ser una imagen PNG, JPEG o WebP optimizada.');
+      const bytes = Buffer.from(match[2], 'base64');
+      if (bytes.toString('base64') !== match[2]) throw new Error('El archivo del logotipo no está codificado correctamente.');
+      const isPng = match[1] === 'png' && bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+      const isJpeg = match[1] === 'jpeg' && bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+      const isWebp = match[1] === 'webp' && bytes.length >= 12 && bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP';
+      if (!isPng && !isJpeg && !isWebp) throw new Error('El contenido del logotipo no coincide con su formato de imagen.');
+      logoDataUrl = value.logoDataUrl;
+    }
+  }
+  return { name: name.trim(), logoDataUrl };
 }
 
 function setServerSession(res, value, maxAge = 3600000) {
@@ -318,6 +345,7 @@ export function createAdminApp({ config, store, liveActivity }) {
       braveSearchEndpoint: settings.braveSearchEndpoint || config.braveSearchEndpoint || DEFAULT_BRAVE_SEARCH_ENDPOINT,
       hasBraveSearchApiKey,
       externalProviders: publicExternalProviders(externalProviders),
+      branding: sanitizeBranding(settings.branding || {}),
       codexOpenAI: { connected: Boolean(settings.codexOpenAI?.connected), selectedModel: settings.codexOpenAI?.selectedModel || '', models: settings.codexOpenAI?.models || [] },
       storage: store.storageStats?.() || null,
       retentionDays: config.metricsRetentionDays
@@ -368,6 +396,13 @@ export function createAdminApp({ config, store, liveActivity }) {
       const models = Array.isArray(saved.models) ? saved.models : [];
       if (typeof req.body.codexSelectedModel !== 'string' || (req.body.codexSelectedModel && !models.some((model) => model.id === req.body.codexSelectedModel))) return res.status(400).json({ error: 'El modelo OpenAI Codex seleccionado no es válido.' });
       patch.codexOpenAI = { ...saved, selectedModel: req.body.codexSelectedModel };
+    }
+    if ('branding' in req.body) {
+      try {
+        patch.branding = sanitizeBranding(req.body.branding, sanitizeBranding(store.getSettings().branding || {}));
+      } catch (error) {
+        return res.status(400).json({ error: error.message || 'La configuración de branding no es válida.' });
+      }
     }
     await store.updateSettings(patch);
     res.json({ updated: true });

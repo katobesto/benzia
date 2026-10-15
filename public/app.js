@@ -453,10 +453,73 @@ function renderSettings() {
     : 'No disponible';
   $('#retention-settings').textContent = `${settings.retentionDays} días`;
   $('#tunnel-origin').textContent = `http://localhost:${settings.gatewayPort}`;
+  renderBranding(settings.branding);
   settings.externalProviders = (settings.externalProviders || []).map((provider) => ({ ...provider, originalId: provider.id, apiKey: provider.apiKey || '', status: provider.status || null }));
   renderExternalProviders();
   renderCodexSettings();
 }
+
+function renderBranding(value = {}) {
+  const branding = { name: value.name || 'benzIA', logoDataUrl: value.logoDataUrl || null };
+  state.settings.branding = branding;
+  const logo = branding.logoDataUrl || '/benzia-logo.png?v=1';
+  $('#branding-name').value = branding.name;
+  $('#branding-preview-name').textContent = branding.name;
+  $('#branding-preview-logo').src = logo;
+  $('#branding-logo-status').textContent = branding.logoDataUrl ? 'Logotipo personalizado' : 'Logo actual de benzIA';
+  $('#dashboard-brand-name').textContent = branding.name;
+  $('.brand').classList.toggle('has-custom-logo', Boolean(branding.logoDataUrl));
+  for (const image of [$('#dashboard-brand-logo'), $('#auth-brand-logo')]) {
+    image.src = logo;
+    image.alt = branding.name;
+  }
+  $('.brand').setAttribute('aria-label', `${branding.name} Console`);
+  document.title = STATUS_MODE ? 'Estado · benzIA' : `${pageName === 'keys' ? 'Claves API' : pageName[0].toUpperCase() + pageName.slice(1)} · ${branding.name}`;
+}
+
+async function optimizeBrandingLogo(file) {
+  if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) throw new Error('Elige una imagen PNG, JPEG o WebP.');
+  if (file.size > 8 * 1024 * 1024) throw new Error('El archivo supera el máximo de 8 MB.');
+  const bitmap = await createImageBitmap(file);
+  try {
+    const scale = Math.min(1, 900 / bitmap.width, 280 / bitmap.height);
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('Este navegador no puede procesar la imagen.');
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    const logoDataUrl = canvas.toDataURL('image/webp', 0.9);
+    if (!logoDataUrl.startsWith('data:image/webp;base64,') || logoDataUrl.length > 850_000) {
+      throw new Error('No se pudo optimizar la imagen. Prueba con un logo más pequeño.');
+    }
+    return logoDataUrl;
+  } finally { bitmap.close(); }
+}
+
+$('#branding-name').addEventListener('input', (event) => {
+  $('#branding-preview-name').textContent = event.currentTarget.value.trim() || 'Nombre de marca';
+});
+$('#branding-logo-file').addEventListener('change', async (event) => {
+  const [file] = event.currentTarget.files || [];
+  if (!file) return;
+  const status = $('#branding-logo-status');
+  status.textContent = 'Optimizando…';
+  try {
+    state.settings.branding.logoDataUrl = await optimizeBrandingLogo(file);
+    $('#branding-preview-logo').src = state.settings.branding.logoDataUrl;
+    status.textContent = 'Logotipo listo para guardar';
+  } catch (error) {
+    event.currentTarget.value = '';
+    status.textContent = error.message;
+  }
+});
+$('#branding-reset-logo').addEventListener('click', () => {
+  state.settings.branding.logoDataUrl = null;
+  $('#branding-logo-file').value = '';
+  $('#branding-preview-logo').src = '/benzia-logo.png?v=1';
+  $('#branding-logo-status').textContent = 'Logo actual de benzIA';
+});
 
 function renderCodexSettings() {
   const codex = state.settings?.codexOpenAI || { connected: false, selectedModel: '', models: [] };
@@ -1062,6 +1125,7 @@ $('#settings-form').addEventListener('submit', async (event) => {
       braveSearchEndpoint: $('#brave-search-endpoint').value,
       externalProviders: (state.settings.externalProviders || []).map((provider) => ({ id: provider.id, originalId: provider.originalId, name: provider.name, baseUrl: provider.baseUrl, apiKey: provider.apiKey, keepApiKey: provider.hasApiKey && !provider.apiKey })),
       codexSelectedModel: $('#codex-model-select').value,
+      branding: { name: $('#branding-name').value, logoDataUrl: state.settings.branding.logoDataUrl },
       ...(upstreamApiKey ? { upstreamApiKey } : {}),
       ...(braveSearchApiKey ? { braveSearchApiKey } : {})
     }) });

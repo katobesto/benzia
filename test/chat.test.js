@@ -27,8 +27,9 @@ test('sirve la interfaz de chat sin exponer su configuración', async (t) => {
   assert.equal(page.headers.get('cache-control'), 'no-store');
   const html = await page.text();
   assert.match(html, /benzIA Chat/);
-  assert.match(html, /<script src="\/chat\/chat\.js\?v=20"/);
-  assert.deepEqual([...html.matchAll(/<script\s+src="([^"]+\.js(?:\?[^"]*)?)"/g)].map((match) => match[1].includes('?v=20')), [true, true, true, true, true]);
+  assert.match(html, /<script src="\/chat\/chat\.js\?v=21"/);
+  assert.match(html, /Powered by <strong>benzIA<\/strong>/);
+  assert.deepEqual([...html.matchAll(/<script\s+src="([^"]+\.js(?:\?[^"]*)?)"/g)].map((match) => match[1].includes('?v=20')), [true, true, true, true, false]);
 
   const stylesheet = await fetch(`${baseUrl}/chat.css`);
   assert.equal(stylesheet.status, 200);

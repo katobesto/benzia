@@ -11,10 +11,14 @@ test('dashboard module imports the API helper with a versioned URL and serves it
   const base = `http://127.0.0.1:${server.address().port}`;
   const page = await fetch(`${base}/dashboard`);
   const html = await page.text();
-  assert.match(html, /<script src="\/app\.js\?v=13"/);
+  assert.match(html, /<script src="\/app\.js\?v=14"/);
   assert.match(html, /id="codex-usage" class="panel codex-usage-panel hidden"/);
   assert.match(html, /id="codex-five-hour-bar"/);
   assert.match(html, /id="codex-weekly-bar"/);
+  assert.match(html, /<h2>Branding<\/h2>/);
+  assert.match(html, /id="branding-name"/);
+  assert.match(html, /id="branding-logo-file"/);
+  assert.match(html, /Powered by <strong>benzIA<\/strong>/);
   const script = await fetch(`${base}/app.js`);
   assert.equal(script.status, 200);
   const source = await script.text();

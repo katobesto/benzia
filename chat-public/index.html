@@ -4,22 +4,23 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
   <meta name="color-scheme" content="dark">
-  <meta name="description" content="Chat privado para probar los modelos servidos por benzIA.">
+  <meta id="chat-description" name="description" content="Chat privado para probar los modelos servidos por benzIA.">
   <title>benzIA Chat</title>
-  <link rel="stylesheet" href="/chat/chat.css?v=20">
+  <link rel="stylesheet" href="/chat/chat.css?v=21">
   <link rel="stylesheet" href="/chat/vendor/github-dark.min.css?v=13">
 </head>
 <body>
   <div class="chat-shell" id="chat-shell" aria-hidden="true">
     <aside class="conversation-rail" id="conversation-rail">
       <div class="rail-brand">
-        <a href="/chat" class="brand" aria-label="benzIA Chat"><img class="brand-logo" src="/chat/benzia-logo.png?v=1" alt=""><span class="brand-context">CHAT</span></a>
+        <a href="/chat" class="brand" id="chat-brand-link" aria-label="benzIA Chat"><img class="brand-logo" id="chat-brand-logo" src="/chat/benzia-logo.png?v=1" alt=""><span class="brand-context">CHAT</span></a>
         <button class="icon-button rail-close" id="rail-close" type="button" aria-label="Cerrar conversaciones">×</button>
       </div>
       <button class="new-chat-button" id="new-chat" type="button"><span>＋</span>Nueva conversación</button>
       <div class="history-heading"><span>Tus chats</span><small id="conversation-count">0 locales</small></div>
       <nav class="conversation-list" id="conversation-list" aria-label="Conversaciones guardadas"></nav>
       <div class="local-note"><i></i><div><strong>Memoria local</strong><span>El historial sólo vive en este navegador.</span></div></div>
+      <small class="powered-by">Powered by <strong>benzIA</strong></small>
     </aside>
 
     <main class="chat-stage">
@@ -66,7 +67,7 @@
       <section class="conversation" id="conversation" aria-live="polite">
         <div class="welcome" id="welcome">
           <div class="signal-mark" aria-hidden="true"><span>b</span><i></i><i></i><i></i></div>
-          <p class="eyebrow">Chat privado con benzIA</p>
+          <p class="eyebrow" id="chat-welcome-brand">Chat privado con benzIA</p>
           <h1>¿En qué puedo ayudarte?</h1>
           <p class="welcome-copy">Habla con el modelo cargado en tu servidor. Cada mensaje conserva el contexto de esta conversación.</p>
           <div class="prompt-grid">
@@ -119,10 +120,10 @@
 
   <div class="access-screen" id="access-screen">
     <form class="access-card" id="access-form">
-      <div class="access-brand"><img class="brand-logo" src="/chat/benzia-logo.png?v=1" alt="benzIA"><span class="brand-context">CHAT</span></div>
+      <div class="access-brand"><img class="brand-logo" id="access-brand-logo" src="/chat/benzia-logo.png?v=1" alt="benzIA"><span class="brand-context">CHAT</span></div>
       <p class="eyebrow">Acceso al modelo</p>
-      <h1>Inicia sesión en benzIA Chat</h1>
-      <p>Introduce una clave de acceso activa creada por el administrador de benzIA.</p>
+      <h1 id="access-brand-title">Inicia sesión en benzIA Chat</h1>
+      <p id="access-brand-copy">Introduce una clave de acceso activa creada por el administrador de benzIA.</p>
       <div class="access-auto-status hidden" id="access-auto-status" role="status" aria-live="polite"><i aria-hidden="true"></i><div><strong>Verificando acceso</strong><span>Validando tu token guardado…</span></div></div>
       <label for="access-token">Token de acceso</label>
       <div class="token-field"><input id="access-token" type="password" required autocomplete="off" placeholder="lmg_••••••••••••"><button id="toggle-token" type="button" aria-label="Mostrar token">VER</button></div>
@@ -149,6 +150,6 @@
   <script src="/chat/vendor/marked.umd.js?v=20" defer></script>
   <script src="/chat/vendor/highlight.min.js?v=20" defer></script>
   <script src="/chat/model-health.js?v=20" defer></script>
-  <script src="/chat/chat.js?v=20" defer></script>
+  <script src="/chat/chat.js?v=21" defer></script>
 </body>
 </html>

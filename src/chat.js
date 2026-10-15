@@ -105,6 +105,15 @@ export function createChatApp({ config, store, rateLimiter: configuredRateLimite
       apiKey: settings.braveSearchApiKey ?? config.braveSearchApiKey
     };
   };
+  app.get('/api/branding', (_req, res) => {
+    const branding = store.getSettings().branding || {};
+    res.set('cache-control', 'no-store').json({
+      name: typeof branding.name === 'string' && branding.name.trim() ? branding.name.trim().slice(0, 60) : 'benzIA',
+      logoDataUrl: typeof branding.logoDataUrl === 'string' && /^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(branding.logoDataUrl)
+        ? branding.logoDataUrl
+        : null
+    });
+  });
   const upload = multer({
     storage: multer.memoryStorage(),
     limits: { files: 1, fileSize: DOCUMENT_MAX_BYTES },

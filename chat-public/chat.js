@@ -26,6 +26,7 @@ const workerClients = new Map();
 const EMPTY_SOURCES = Object.freeze([]);
 const chatCompletionsModels = new Map();
 let previewAttempt = 0;
+let brandingName = 'benzIA';
 
 window.marked.setOptions({ gfm: true, breaks: true });
 
@@ -72,6 +73,25 @@ const state = {
   generating: false,
   controller: null
 };
+
+function applyBranding(value = {}) {
+  brandingName = typeof value.name === 'string' && value.name.trim() ? value.name.trim().slice(0, 60) : 'benzIA';
+  const logo = typeof value.logoDataUrl === 'string' && /^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(value.logoDataUrl)
+    ? value.logoDataUrl
+    : '/chat/benzia-logo.png?v=1';
+  document.title = `${brandingName} Chat`;
+  $('#chat-description').content = `Chat privado para probar los modelos servidos por ${brandingName}.`;
+  $('#chat-brand-link').setAttribute('aria-label', `${brandingName} Chat`);
+  $('#chat-welcome-brand').textContent = `Chat privado con ${brandingName}`;
+  $('#access-brand-title').textContent = `Inicia sesión en ${brandingName} Chat`;
+  $('#access-brand-copy').textContent = `Introduce una clave de acceso activa creada por el administrador de ${brandingName}.`;
+  for (const image of [$('#chat-brand-logo'), $('#access-brand-logo')]) {
+    image.src = logo;
+    image.alt = brandingName;
+  }
+  document.querySelectorAll('.message.assistant .message-meta strong').forEach((author) => { author.textContent = brandingName; });
+  document.querySelectorAll('.message.assistant .message-avatar').forEach((avatar) => { avatar.textContent = brandingName.slice(0, 1).toUpperCase(); });
+}
 
 function normalizedWebSearch(value) {
   if (!value || typeof value !== 'object' || !Array.isArray(value.sources)) return null;
@@ -1282,14 +1302,14 @@ function messageElement(message, index) {
   article.dataset.index = String(index);
   const avatar = document.createElement('div');
   avatar.className = 'message-avatar';
-  avatar.textContent = message.role === 'user' ? 'TÚ' : 'b';
+  avatar.textContent = message.role === 'user' ? 'TÚ' : brandingName.slice(0, 1).toUpperCase();
   const body = document.createElement('div');
   body.className = 'message-body';
   const meta = document.createElement('div');
   meta.className = 'message-meta';
   const author = document.createElement('div');
   const strong = document.createElement('strong');
-  strong.textContent = message.role === 'user' ? 'Tú' : 'benzIA';
+  strong.textContent = message.role === 'user' ? 'Tú' : brandingName;
   const detail = document.createElement('span');
   detail.textContent = message.role === 'user' ? 'MENSAJE' : selectedModel();
   author.append(strong, detail);
@@ -2370,6 +2390,9 @@ $('#message-input').addEventListener('paste', (event) => {
 renderPendingAttachments();
 renderWebSearchControl();
 renderAll();
+fetch('/chat/api/branding').then(async (response) => {
+  if (response.ok) applyBranding(await response.json());
+}).catch(() => {});
 if (state.token) {
   setAccessVerifying(true);
   connect(state.token).catch((error) => showAccess(error.message));
