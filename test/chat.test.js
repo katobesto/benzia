@@ -29,6 +29,7 @@ test('sirve la interfaz de chat sin exponer su configuración', async (t) => {
   assert.match(html, /benzIA Chat/);
   assert.match(html, /<script src="\/chat\/chat\.js\?v=21"/);
   assert.match(html, /Powered by <strong>benzIA<\/strong>/);
+  assert.match(html, /<a href="\/chat" class="brand" id="chat-brand-link" aria-label="benzIA Chat"><img class="brand-logo" id="chat-brand-logo"/);
   assert.deepEqual([...html.matchAll(/<script\s+src="([^"]+\.js(?:\?[^"]*)?)"/g)].map((match) => match[1].includes('?v=20')), [true, true, true, true, false]);
 
   const stylesheet = await fetch(`${baseUrl}/chat.css`);

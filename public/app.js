@@ -467,13 +467,11 @@ function renderBranding(value = {}) {
   $('#branding-preview-name').textContent = branding.name;
   $('#branding-preview-logo').src = logo;
   $('#branding-logo-status').textContent = branding.logoDataUrl ? 'Logotipo personalizado' : 'Logo actual de benzIA';
-  $('#dashboard-brand-name').textContent = branding.name;
-  $('.brand').classList.toggle('has-custom-logo', Boolean(branding.logoDataUrl));
   for (const image of [$('#dashboard-brand-logo'), $('#auth-brand-logo')]) {
     image.src = logo;
     image.alt = branding.name;
   }
-  $('.brand').setAttribute('aria-label', `${branding.name} Console`);
+  $('.brand').setAttribute('aria-label', branding.name);
   document.title = STATUS_MODE ? 'Estado · benzIA' : `${pageName === 'keys' ? 'Claves API' : pageName[0].toUpperCase() + pageName.slice(1)} · ${branding.name}`;
 }
 
