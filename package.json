@@ -10,7 +10,8 @@
   "scripts": {
     "start": "node --disable-warning=ExperimentalWarning src/server.js",
     "dev": "node --disable-warning=ExperimentalWarning --watch src/server.js",
-    "test": "node --disable-warning=ExperimentalWarning --test"
+    "test": "node --disable-warning=ExperimentalWarning --test",
+    "test:chat-ui": "node --test scripts/chat-ui-check.mjs"
   },
   "dependencies": {
     "@highlightjs/cdn-assets": "^11.12.0",

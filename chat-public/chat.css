@@ -110,7 +110,7 @@ body.ready .chat-shell { visibility: visible; }
 .token-button:hover { background: rgba(255,255,255,.07); color: var(--text); }
 .token-label-short { display: none; }
 
-.conversation { min-height: 0; overflow-y: auto; scroll-behavior: smooth; scrollbar-width: thin; scrollbar-color: #4a4a4a transparent; }
+.conversation { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; scrollbar-width: thin; scrollbar-color: #4a4a4a transparent; }
 .welcome { width: min(760px,calc(100% - 40px)); min-height: 100%; margin: 0 auto; padding: clamp(70px,13vh,150px) 0 50px; display: flex; flex-direction: column; align-items: center; text-align: center; animation: reveal .32s ease both; }
 .signal-mark { width: 44px; height: 44px; margin-bottom: 24px; display: grid; place-items: center; border-radius: 50%; background: var(--accent); }
 .signal-mark span { color: #0d2921; font-size: 22px; font-weight: 750; }
@@ -125,7 +125,7 @@ body.ready .chat-shell { visibility: visible; }
 .prompt-card strong { margin-top: auto; font-size: 13px; font-weight: 550; }
 .prompt-card small { margin-top: 3px; color: var(--dim); font-size: 11px; }
 .message-list { width: min(768px,calc(100% - 40px)); margin: 0 auto; padding: 30px 0 120px; }
-.message { display: grid; grid-template-columns: 32px minmax(0,1fr); gap: 15px; padding: 20px 0; animation: messageIn .2s ease both; }
+.message { display: grid; grid-template-columns: 32px minmax(0,1fr); gap: 15px; padding: 20px 0; contain: layout style; animation: messageIn .2s ease both; }
 .message-avatar { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 50%; background: var(--accent); color: #0d2921; font-size: 13px; font-weight: 700; }
 .message.user .message-avatar { background: #505050; color: var(--text); font-size: 10px; }
 .message-body { min-width: 0; }
@@ -345,6 +345,28 @@ kbd { padding: 1px 4px; border: 1px solid var(--line); border-radius: 4px; color
   .rail-close, .mobile-rail { display: grid; }
 }
 
+/* Keep all header actions reachable on laptops and tablets as well as phones. */
+.header-left { flex: 1 1 auto; }
+.model-control { min-width: 0; }
+.model-choice { flex: 1 1 auto; }
+.header-right { flex: 0 0 auto; }
+.chat-stage { grid-template-columns: minmax(0,1fr); }
+.chat-header, .composer-zone { min-width: 0; }
+.chat-shell, .chat-stage, .conversation-rail { height: var(--chat-height, 100dvh); min-height: 0; }
+button, select { touch-action: manipulation; }
+@media (min-width: 621px) and (max-width: 1350px) {
+  .chat-header { gap: 8px; padding-right: 12px; padding-left: 12px; }
+  .header-left, .header-right { gap: 5px; }
+  .model-control { flex: 1 1 auto; }
+  .model-choice { grid-template-columns: minmax(0,1fr); }
+  .model-control label { display: none; }
+  .model-choice select { min-width: 0; width: 100%; max-width: 280px; }
+  .model-limit-note { grid-column: 1; }
+  .connection-state, .identity-pill { display: none; }
+  .model-health-label-long, .token-label-long, .instructions-label { display: none; }
+  .model-health-label-short, .token-label-short { display: inline; }
+}
+
 @media (max-width: 620px) {
   .chat-header { height: 68px; padding: 0 max(9px,env(safe-area-inset-right)) 0 max(9px,env(safe-area-inset-left)); gap: 6px; }
   .chat-stage { grid-template-rows: 68px minmax(0,1fr) auto; }
@@ -415,6 +437,8 @@ kbd { padding: 1px 4px; border: 1px solid var(--line); border-radius: 4px; color
   .message-list { width: calc(100% - 20px); }
   .access-screen { padding-right: 10px; padding-left: 10px; }
   .access-card { padding-right: 15px; padding-left: 15px; }
+  .web-search-button { width: 40px; flex: 0 0 40px; padding: 0; justify-content: center; }
+  .web-search-button span { display: none; }
 }
 
 @media (max-height: 600px) and (orientation: landscape) {

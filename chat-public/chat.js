@@ -13,6 +13,18 @@ const MAX_DOCUMENT_CHARS = 120_000;
 const MAX_CUSTOM_INSTRUCTIONS = 2000;
 const DEFAULT_MAX_OUTPUT_TOKENS = 32768;
 let pendingMarkdownFrame = 0;
+let pendingMessageUpdate = null;
+let renderedConversationId = null;
+let renderedMessages = new Map();
+let composerResizeFrame = 0;
+let conversationSaveTask = null;
+let conversationsDirty = false;
+let conversationNearEnd = true;
+const markdownViews = new WeakMap();
+const blockSignatures = new WeakMap();
+const workerClients = new Map();
+const EMPTY_SOURCES = Object.freeze([]);
+const chatCompletionsModels = new Map();
 let previewAttempt = 0;
 
 window.marked.setOptions({ gfm: true, breaks: true });
@@ -182,9 +194,14 @@ async function loadConversations(onProgress = () => {}) {
   }
 }
 
-function saveConversations() {
-  state.conversations.sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
-  state.conversations = state.conversations.slice(0, MAX_CONVERSATIONS);
+function flushConversations() {
+  if (!conversationsDirty) return;
+  conversationsDirty = false;
+  if (conversationSaveTask !== null) {
+    if (window.cancelIdleCallback) window.cancelIdleCallback(conversationSaveTask);
+    else clearTimeout(conversationSaveTask);
+    conversationSaveTask = null;
+  }
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state.conversations));
     if (state.activeId) localStorage.setItem(ACTIVE_KEY, state.activeId);
@@ -193,6 +210,22 @@ function saveConversations() {
     setTimeout(() => toast('El almacenamiento local está lleno; elimina algún chat antiguo.'), 0);
   }
 }
+
+function saveConversations() {
+  state.conversations.sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+  state.conversations = state.conversations.slice(0, MAX_CONVERSATIONS);
+  conversationsDirty = true;
+  if (conversationSaveTask !== null) return;
+  // Serialize the history once after the UI/network have had a chance to run.
+  conversationSaveTask = window.requestIdleCallback
+    ? window.requestIdleCallback(flushConversations, { timeout: 500 })
+    : setTimeout(flushConversations, 0);
+}
+
+window.addEventListener('pagehide', flushConversations);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') flushConversations();
+});
 
 function activeConversation() {
   return state.conversations.find((conversation) => conversation.id === state.activeId) || null;
@@ -207,11 +240,24 @@ function positiveTokenLimit(value) {
   return Number.isSafeInteger(limit) && limit > 0 ? limit : null;
 }
 
+function firstPositiveTokenLimit(...values) {
+  return values.map(positiveTokenLimit).find((limit) => limit !== null) ?? null;
+}
+
 function modelTokenLimits(modelId = selectedModel()) {
   const metadata = state.modelMetadata?.[modelId] || {};
-  const contextLength = positiveTokenLimit(metadata.max_context_length ?? metadata.context_length ?? metadata.loaded_context_length ?? metadata.context_window ?? metadata.max_context_tokens ?? metadata.limits?.context_length);
-  const outputLimit = positiveTokenLimit(metadata.top_provider?.max_completion_tokens ?? metadata.top_provider?.max_output_tokens ?? metadata.max_completion_tokens ?? metadata.max_output_tokens ?? metadata.limits?.max_output_tokens);
-  return { contextLength, outputLimit };
+  // llama.cpp/NInfer advertise their active context in meta.n_ctx, while
+  // LM Studio and other compatible catalogues use the top-level fields.
+  const loadedContext = firstPositiveTokenLimit(metadata.loaded_context_length, metadata.meta?.n_ctx);
+  const contextLength = firstPositiveTokenLimit(
+    metadata.max_context_length, metadata.context_length, metadata.context_window,
+    metadata.max_context_tokens, metadata.limits?.context_length, metadata.meta?.n_ctx_train, loadedContext
+  );
+  const outputLimit = firstPositiveTokenLimit(
+    metadata.top_provider?.max_completion_tokens, metadata.top_provider?.max_output_tokens,
+    metadata.max_completion_tokens, metadata.max_output_tokens, metadata.limits?.max_output_tokens
+  );
+  return { contextLength, loadedContext, outputLimit };
 }
 
 function outputTokenBudget(modelId = selectedModel()) {
@@ -242,12 +288,12 @@ function renderModelTokenLimits() {
     return;
   }
   const metadata = state.modelMetadata?.[model] || {};
-  const { contextLength, outputLimit } = modelTokenLimits(model);
+  const { contextLength, loadedContext, outputLimit } = modelTokenLimits(model);
   const requested = outputTokenBudget(model);
-  note.textContent = `Contexto ${compactTokenCount(contextLength)} · salida máx. ${compactTokenCount(outputLimit)} · petición ${compactTokenCount(requested)}`;
+  const outputLabel = outputLimit ? `salida máx. ${compactTokenCount(outputLimit)}` : 'salida no publicada';
+  note.textContent = `Contexto ${compactTokenCount(contextLength)} · ${outputLabel} · petición ${compactTokenCount(requested)}`;
   const source = metadata.benzIA_model_limits_source ? ` Fuente: ${metadata.benzIA_model_limits_source}.` : '';
-  const loadedContext = positiveTokenLimit(metadata.loaded_context_length);
-  note.title = `Contexto máximo: ${contextLength ? `${formatCount(contextLength)} tokens` : 'el proveedor no lo publica'}${loadedContext ? `. Contexto cargado: ${formatCount(loadedContext)} tokens` : ''}. Salida máxima: ${outputLimit ? `${formatCount(outputLimit)} tokens` : 'el proveedor no la publica'}. benzIA solicitará hasta ${formatCount(requested)} tokens de salida.${source}`;
+  note.title = `Contexto publicado: ${contextLength ? `${formatCount(contextLength)} tokens` : 'el proveedor no lo publica'}${loadedContext ? `. Contexto cargado: ${formatCount(loadedContext)} tokens` : ''}. Salida máxima: ${outputLimit ? `${formatCount(outputLimit)} tokens` : 'el proveedor no publica un límite independiente'}. Límite de petición del chat: ${formatCount(requested)} tokens de salida.${source}`;
 }
 
 function supportsReasoningEffort(model) {
@@ -489,6 +535,7 @@ function renderHistory() {
     remove.textContent = '×';
     remove.addEventListener('click', (event) => {
       event.stopPropagation();
+      if (state.generating) return;
       state.conversations = state.conversations.filter((entry) => entry.id !== conversation.id);
       if (state.activeId === conversation.id) state.activeId = '';
       saveConversations();
@@ -561,35 +608,138 @@ function linkResearchCitations(container, sources) {
   });
 }
 
-function appendMessageContent(container, text, sources = []) {
-  const source = String(text || '');
-  const rendered = window.marked.parse(source);
-  container.innerHTML = window.DOMPurify.sanitize(rendered, {
+function highlightLanguageId(language) {
+  const normalized = String(language || '').trim().toLowerCase();
+  const aliases = {
+    'vb.net': 'vbnet',
+    'visual basic': 'vbnet',
+    'visual-basic': 'vbnet',
+    visualbasic: 'vbnet',
+    vb: 'vbnet',
+    'c#': 'csharp',
+    'c++': 'cpp'
+  };
+  return aliases[normalized] || normalized;
+}
+
+function renderOffThread(type, text, language = '') {
+  let client = workerClients.get(type);
+  if (!client) {
+    client = { worker: null, tasks: new Map(), nextId: 0, failed: false };
+    workerClients.set(type, client);
+    try {
+      client.worker = new Worker('/chat/render-worker.js?v=19');
+      client.worker.onmessage = ({ data }) => {
+        const resolve = client.tasks.get(data.id);
+        client.tasks.delete(data.id);
+        resolve?.(data.html);
+      };
+      client.worker.onerror = () => {
+        client.failed = true;
+        client.worker.terminate();
+        for (const resolve of client.tasks.values()) resolve(null);
+        client.tasks.clear();
+      };
+    } catch { client.failed = true; }
+  }
+  if (client.failed) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const id = ++client.nextId;
+    client.tasks.set(id, resolve);
+    client.worker.postMessage({ id, type, text, language });
+  });
+}
+
+const highlightedCode = new Map();
+let highlightedCodeSize = 0;
+const codeHighlightObserver = 'IntersectionObserver' in window ? new IntersectionObserver((entries) => {
+  for (const entry of entries) {
+    if (!entry.isIntersecting) continue;
+    codeHighlightObserver.unobserve(entry.target);
+    highlightCode(entry.target);
+  }
+}, { root: $('#conversation'), rootMargin: '200px' }) : null;
+
+async function highlightCode(code) {
+  if (!code.isConnected || code.textContent.length > 100_000) return;
+  const text = code.textContent;
+  const language = highlightLanguageId([...code.classList].find((name) => name.startsWith('language-'))?.slice(9));
+  const key = `${language}\n${text}`;
+  let html = highlightedCode.get(key);
+  if (html === undefined) {
+    html = await renderOffThread('highlight', text, language);
+    if (html === null) {
+      // Workers can be disabled by browser policy. Keep the same capabilities.
+      if (!window.hljs) return;
+      html = language && window.hljs.getLanguage(language)
+        ? window.hljs.highlight(text, { language, ignoreIllegals: true }).value
+        : window.hljs.highlightAuto(text).value;
+    }
+    // Identical visible blocks can finish their worker jobs concurrently.
+    const previous = highlightedCode.get(key);
+    if (previous !== undefined) highlightedCodeSize -= key.length + previous.length;
+    highlightedCode.set(key, html);
+    highlightedCodeSize += key.length + html.length;
+    while (highlightedCode.size > 80 || highlightedCodeSize > 2_000_000) {
+      const oldest = highlightedCode.keys().next().value;
+      highlightedCodeSize -= oldest.length + highlightedCode.get(oldest).length;
+      highlightedCode.delete(oldest);
+    }
+  }
+  if (!code.isConnected || code.textContent !== text) return;
+  code.innerHTML = window.DOMPurify.sanitize(html);
+  code.classList.add('hljs');
+}
+
+function reconcileContent(container, incoming) {
+  let cursor = container.firstChild;
+  for (const node of [...incoming.childNodes]) {
+    const signature = node.outerHTML ?? node.textContent;
+    if (cursor && blockSignatures.get(cursor) === signature) {
+      cursor = cursor.nextSibling;
+      continue;
+    }
+    blockSignatures.set(node, signature);
+    if (cursor) {
+      const next = cursor.nextSibling;
+      cursor.replaceWith(node);
+      cursor = next;
+    } else container.append(node);
+  }
+  while (cursor) {
+    const next = cursor.nextSibling;
+    cursor.remove();
+    cursor = next;
+  }
+}
+
+function applyMessageContent(container, rendered, sources, streaming) {
+  const viewport = $('#conversation');
+  const follow = container.isConnected && state.generating
+    && viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop < 80;
+  const incoming = document.createElement('div');
+  incoming.innerHTML = window.DOMPurify.sanitize(rendered, {
     USE_PROFILES: { html: true },
     FORBID_TAGS: ['img', 'style', 'form', 'iframe', 'object', 'embed', 'video', 'audio'],
     FORBID_ATTR: ['style']
   });
 
-  container.querySelectorAll('a').forEach((link) => {
+  incoming.querySelectorAll('a').forEach((link) => {
     link.target = '_blank';
     link.rel = 'noopener noreferrer nofollow';
   });
-  container.querySelectorAll('input[type="checkbox"]').forEach((checkbox) => { checkbox.disabled = true; });
-  container.querySelectorAll('table').forEach((table) => {
+  incoming.querySelectorAll('input[type="checkbox"]').forEach((checkbox) => { checkbox.disabled = true; });
+  incoming.querySelectorAll('table').forEach((table) => {
     const wrapper = document.createElement('div');
     wrapper.className = 'table-wrap';
     table.replaceWith(wrapper);
     wrapper.append(table);
   });
-  container.querySelectorAll('pre').forEach((pre) => {
+  incoming.querySelectorAll('pre').forEach((pre) => {
     const code = pre.querySelector('code');
     const content = code?.textContent || '';
     const languageClass = [...(code?.classList || [])].find((name) => name.startsWith('language-'));
     const language = languageClass ? languageClass.slice(9) : 'código';
-    if (code && content.length <= 100_000 && window.hljs) {
-      const requestedLanguage = languageClass?.slice(9).toLowerCase();
-      if (!requestedLanguage || window.hljs.getLanguage(requestedLanguage)) window.hljs.highlightElement(code);
-    }
     const wrapper = document.createElement('div');
     wrapper.className = 'code-block';
     const toolbar = document.createElement('div');
@@ -621,7 +771,43 @@ function appendMessageContent(container, text, sources = []) {
     pre.replaceWith(wrapper);
     wrapper.append(toolbar, pre);
   });
-  linkResearchCitations(container, sources);
+  linkResearchCitations(incoming, sources);
+  reconcileContent(container, incoming);
+  if (!streaming) container.querySelectorAll('pre code:not(.hljs)').forEach((code) => {
+    if (codeHighlightObserver) codeHighlightObserver.observe(code);
+    else setTimeout(() => highlightCode(code), 0);
+  });
+  if (container.isConnected && state.generating && follow) viewport.scrollTop = viewport.scrollHeight;
+  scheduleScrollUpdate();
+}
+
+function appendMessageContent(container, text, sources = EMPTY_SOURCES, streaming = false) {
+  const source = String(text || '');
+  let view = markdownViews.get(container);
+  if (!view) {
+    view = { source: null, streaming, sources, busy: false };
+    markdownViews.set(container, view);
+  }
+  if (view.source === source && view.streaming === streaming && view.sources === sources) return;
+  view.source = source;
+  view.streaming = streaming;
+  view.sources = sources;
+  if (!streaming) {
+    applyMessageContent(container, window.marked.parse(source), sources, false);
+    return;
+  }
+  if (view.busy) return;
+  const renderLatest = async () => {
+    view.busy = true;
+    const requested = view.source;
+    const rendered = await renderOffThread('markdown', requested);
+    view.busy = false;
+    // A completed/replaced message must never be overwritten by a stale job.
+    if (!container.isConnected || !view.streaming) return;
+    applyMessageContent(container, rendered ?? window.marked.parse(requested), view.sources, true);
+    if (view.source !== requested) renderLatest();
+  };
+  renderLatest();
 }
 
 function messageAttachmentsElement(attachments) {
@@ -778,6 +964,26 @@ function estimateTokens(text) {
   const asciiChars = (normalized.match(/[\x00-\x7F]/g) || []).length;
   const nonAsciiChars = normalized.length - asciiChars;
   return Math.max(1, Math.ceil(asciiChars / 4 + nonAsciiChars / 2));
+}
+
+function incrementalTokenEstimate() {
+  // Same UTF-16/ASCII estimate as estimateTokens, including trim(), but each
+  // received character is inspected once instead of rescanning the whole reply.
+  let units = 0;
+  let whitespace = 0;
+  return (fragment) => {
+    const text = String(fragment || '');
+    for (let i = 0; i < text.length; i += 1) {
+      const weight = text.charCodeAt(i) <= 127 ? 1 : 2;
+      if (!text[i].trim()) {
+        if (units) whitespace += weight;
+      } else {
+        units += whitespace + weight;
+        whitespace = 0;
+      }
+    }
+    return Math.ceil(units / 4);
+  };
 }
 
 function estimateContextInputTokens(context) {
@@ -990,6 +1196,7 @@ function thinkingPanelElement(message) {
   content.className = 'thinking-content hidden';
   content.textContent = message.thinking || '';
   const setExpanded = (expanded) => {
+    if (expanded) content.textContent = message.thinking || '';
     content.classList.toggle('hidden', !expanded);
     panel.classList.toggle('expanded', expanded);
     toggle.setAttribute('aria-expanded', String(expanded));
@@ -1058,6 +1265,17 @@ function syncThinkingLine(panel, message) {
   if (phrase) line.textContent = phrase;
 }
 
+function regenerateResponseButton() {
+  const regenerate = document.createElement('button');
+  regenerate.type = 'button';
+  regenerate.className = 'regenerate-message';
+  regenerate.textContent = 'REGENERAR';
+  regenerate.title = 'Borrar esta respuesta y generarla de nuevo';
+  regenerate.setAttribute('aria-label', 'Regenerar la última respuesta');
+  regenerate.addEventListener('click', regenerateLastResponse);
+  return regenerate;
+}
+
 function messageElement(message, index) {
   const article = document.createElement('article');
   article.className = `message ${message.role}${message.pending ? ' pending' : ''}${message.error ? ' error' : ''}`;
@@ -1086,7 +1304,7 @@ function messageElement(message, index) {
   meta.append(author, copy);
   const content = document.createElement('div');
   content.className = `message-content${message.pending && !message.content ? ' hidden' : ''}`;
-  appendMessageContent(content, message.content || '', message.research?.sources || []);
+  appendMessageContent(content, message.content || '', message.research?.sources || EMPTY_SOURCES, Boolean(message.pending));
   const attachments = normalizedAttachments(message.attachments);
   body.append(meta);
   if (attachments.length) body.append(messageAttachmentsElement(attachments));
@@ -1100,30 +1318,89 @@ function messageElement(message, index) {
   if (message.role === 'assistant') {
     const conversation = activeConversation();
     if (!message.pending && conversation?.messages.at(-1) === message) {
-      const regenerate = document.createElement('button');
-      regenerate.type = 'button';
-      regenerate.className = 'regenerate-message';
-      regenerate.textContent = 'REGENERAR';
-      regenerate.title = 'Borrar esta respuesta y generarla de nuevo';
-      regenerate.setAttribute('aria-label', 'Regenerar la última respuesta');
-      regenerate.addEventListener('click', regenerateLastResponse);
-      meta.append(regenerate);
+      meta.append(regenerateResponseButton());
     }
     const stats = buildStatsDom(message);
-    if (stats.childElementCount) body.append(stats);
+    body.append(stats);
   }
   article.append(avatar, body);
   return article;
 }
 
+function completeMessageElement(article, message) {
+  article.classList.remove('pending');
+  article.classList.toggle('error', Boolean(message.error));
+  const content = article.querySelector('.message-content');
+  content.classList.remove('hidden');
+  appendMessageContent(content, message.content, message.research?.sources || EMPTY_SOURCES);
+  const panel = article.querySelector('.thinking-panel');
+  if (panel) {
+    if (!message.thinking) panel.remove();
+    else {
+      panel.classList.remove('is-pending');
+      panel.querySelector('.thinking-label strong').textContent = 'Thinking';
+      panel.querySelector('.thinking-content').textContent = message.thinking;
+      syncThinkingLine(panel, message);
+    }
+  }
+  const stats = article.querySelector('.message-stats');
+  if (stats) stats.replaceChildren(...buildStatsDom(message).children);
+  if (!article.querySelector('.regenerate-message')) article.querySelector('.message-meta').append(regenerateResponseButton());
+}
+
 function renderMessages({ scrollToEnd = false } = {}) {
+  const viewport = $('#conversation');
+  const follow = scrollToEnd || (state.generating
+    && viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop < 80);
   const conversation = activeConversation();
   const messages = conversation?.messages || [];
   $('#welcome').classList.toggle('hidden', messages.length > 0);
   const list = $('#message-list');
   list.classList.toggle('hidden', messages.length === 0);
-  list.replaceChildren(...messages.filter((message) => message.role !== 'system').map(messageElement));
-  if (scrollToEnd) requestAnimationFrame(() => {
+  if (renderedConversationId !== (conversation?.id || null)) {
+    codeHighlightObserver?.disconnect();
+    list.replaceChildren();
+    renderedMessages.clear();
+    renderedConversationId = conversation?.id || null;
+  }
+  const next = new Map();
+  let cursor = list.firstElementChild;
+  messages.forEach((message, index) => {
+    if (message.role === 'system') return;
+    const version = [message.content, message.thinking, message.pending, message.error, message.stats,
+      index === messages.length - 1, JSON.stringify(message.research), message.webSearch];
+    let entry = renderedMessages.get(message);
+    if (entry?.version[2] && !message.pending && message.role === 'assistant') {
+      completeMessageElement(entry.element, message);
+      entry.version = version;
+    }
+    if (!entry || entry.version.some((value, i) => value !== version[i])) {
+      const element = messageElement(message, index);
+      if (entry) element.style.animation = 'none';
+      if (entry?.element === cursor) {
+        const following = cursor.nextElementSibling;
+        cursor.querySelectorAll('pre code').forEach((code) => codeHighlightObserver?.unobserve(code));
+        cursor.replaceWith(element);
+        cursor = following;
+      } else list.insertBefore(element, cursor);
+      entry = { element, version };
+    } else {
+      entry.element.dataset.index = String(index);
+      if (entry.element !== cursor) list.insertBefore(entry.element, cursor);
+      else cursor = cursor.nextElementSibling;
+    }
+    const detail = entry.element.querySelector('.message-meta > div > span');
+    if (detail && message.role !== 'user' && detail.textContent !== selectedModel()) detail.textContent = selectedModel();
+    next.set(message, entry);
+  });
+  while (cursor) {
+    const following = cursor.nextElementSibling;
+    cursor.querySelectorAll('pre code').forEach((code) => codeHighlightObserver?.unobserve(code));
+    cursor.remove();
+    cursor = following;
+  }
+  renderedMessages = next;
+  if (follow) requestAnimationFrame(() => {
     const viewport = $('#conversation');
     viewport.scrollTop = messages.length ? viewport.scrollHeight : 0;
     updateJumpToLatestButton();
@@ -1131,11 +1408,21 @@ function renderMessages({ scrollToEnd = false } = {}) {
   else updateJumpToLatestButton();
 }
 
+let scrollUpdateFrame = 0;
+function scheduleScrollUpdate() {
+  if (scrollUpdateFrame) return;
+  scrollUpdateFrame = requestAnimationFrame(() => {
+    scrollUpdateFrame = 0;
+    updateJumpToLatestButton();
+  });
+}
+
 function updateJumpToLatestButton() {
   const viewport = $('#conversation');
   const button = $('#jump-to-latest');
   if (!viewport || !button) return;
   const remaining = viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop;
+  conversationNearEnd = remaining < 80;
   const threshold = Math.max(160, viewport.clientHeight * 0.18);
   button.classList.toggle('hidden', viewport.scrollHeight <= viewport.clientHeight || remaining <= threshold);
 }
@@ -1216,6 +1503,8 @@ function closeHtmlPreview() {
 }
 
 async function connect(token) {
+  flushConversations();
+  chatCompletionsModels.clear();
   // This is the only blocking access check. It is served by benzIA itself and
   // does not contact a model or the upstream provider.
   const configResponse = await fetch('/chat/api/config', { headers: { authorization: `Bearer ${token}` } });
@@ -1238,6 +1527,7 @@ async function connect(token) {
   $('#identity-pill').textContent = config.identity?.name || 'Clave activa';
   $('#access-screen').classList.add('dismissed');
   $('#access-screen').setAttribute('aria-hidden', 'true');
+  $('#chat-shell').setAttribute('aria-hidden', 'false');
   setAccessVerifying(false);
   document.body.classList.add('ready');
   setConnection('pending', 'Cargando modelos');
@@ -1449,6 +1739,7 @@ function showAccess(message = '') {
   localStorage.removeItem(TOKEN_KEY);
   sessionStorage.removeItem(TOKEN_KEY);
   document.body.classList.remove('ready');
+  $('#chat-shell').setAttribute('aria-hidden', 'true');
   setAccessVerifying(false);
   $('#access-screen').classList.remove('dismissed');
   $('#access-screen').setAttribute('aria-hidden', 'false');
@@ -1528,27 +1819,34 @@ function updatePendingMessage(conversation, content, thinking = null) {
   if (!message || message.role !== 'assistant') return;
   message.content = content;
   if (thinking !== null) message.thinking = thinking;
+  pendingMessageUpdate = { conversation, message };
   if (pendingMarkdownFrame) return;
-  pendingMarkdownFrame = setTimeout(() => {
+  pendingMarkdownFrame = requestAnimationFrame(() => {
     pendingMarkdownFrame = 0;
+    const update = pendingMessageUpdate;
+    pendingMessageUpdate = null;
+    if (!update || update.conversation !== activeConversation() || !update.message.pending) return;
+    const { conversation, message } = update;
     const article = $(`.message[data-index="${conversation.messages.length - 1}"]`);
     if (!article) return;
     const contentEl = article.querySelector('.message-content');
     if (contentEl) {
       contentEl.classList.toggle('hidden', !message.content);
-      appendMessageContent(contentEl, message.content || '', message.research?.sources || []);
+      appendMessageContent(contentEl, message.content || '', message.research?.sources || EMPTY_SOURCES, true);
     }
     const thinkingEl = article.querySelector('.thinking-content');
     if (thinkingEl) {
-      thinkingEl.textContent = message.thinking || '';
-      if (!thinkingEl.classList.contains('hidden')) thinkingEl.scrollTop = thinkingEl.scrollHeight;
+      if (!thinkingEl.classList.contains('hidden')) {
+        thinkingEl.textContent = message.thinking || '';
+        thinkingEl.scrollTop = thinkingEl.scrollHeight;
+      }
     }
     const thinkingPanel = article.querySelector('.thinking-panel');
     if (thinkingPanel) syncThinkingLine(thinkingPanel, message);
-    const statsEl = article.querySelector('.message-stats');
-    if (statsEl) statsEl.replaceChildren(...buildStatsDom(message).children);
-    updateJumpToLatestButton();
-  }, 100);
+    const thinkingLabel = article.querySelector('.thinking-label strong');
+    if (thinkingLabel && message.thinking) thinkingLabel.textContent = 'Thinking';
+    scheduleScrollUpdate();
+  });
 }
 
 // The chips must keep moving between network fragments (for example, while the
@@ -1580,14 +1878,34 @@ function consumeSse(buffer, onPayload) {
   const events = buffer.split(/\r?\n\r?\n/);
   const remainder = events.pop() || '';
   events.forEach((event) => {
-    event.split(/\r?\n/).forEach((line) => {
-      if (!line.startsWith('data:')) return;
-      const data = line.slice(5).trim();
-      if (!data || data === '[DONE]') return;
-      try { onPayload(JSON.parse(data)); } catch { /* Se ignoran fragmentos incompletos. */ }
-    });
+    const data = event.split(/\r?\n/).filter((line) => line.startsWith('data:'))
+      .map((line) => line.slice(5).trimStart()).join('\n').trim();
+    if (!data || data === '[DONE]') return;
+    let payload;
+    try { payload = JSON.parse(data); } catch { return; }
+    onPayload(payload);
   });
   return remainder;
+}
+
+async function readSse(response, onPayload) {
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer = consumeSse(buffer + decoder.decode(value, { stream: true }), onPayload);
+    }
+    // Some compatible providers close immediately after the last JSON event.
+    consumeSse(`${buffer}${decoder.decode()}\n\n`, onPayload);
+  } catch (error) {
+    await reader.cancel().catch(() => {});
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 function webGroundingInstruction(webContext) {
@@ -1641,20 +1959,12 @@ async function requestResearch(conversation) {
   }
   if (!response.ok) throw new Error(await readError(response));
   if (!response.body) throw new Error('El servidor no ha podido iniciar la investigación web.');
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
   let context = '';
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    buffer = consumeSse(buffer, (event) => {
-      updateResearchMessage(conversation, event);
-      if (event.type === 'research.complete') context = event.context || '';
-      if (event.type === 'research.error') throw new Error(event.message || 'No se pudo completar la investigación web.');
-    });
-  }
+  await readSse(response, (event) => {
+    updateResearchMessage(conversation, event);
+    if (event.type === 'research.complete') context = event.context || '';
+    if (event.type === 'research.error') throw new Error(event.message || 'No se pudo completar la investigación web.');
+  });
   const researchState = conversation.messages.at(-1)?.research?.state;
   if (!context && researchState !== 'complete' && researchState !== 'disabled') throw new Error('Brave no encontró fuentes relevantes para esta consulta.');
   return context;
@@ -1690,28 +2000,32 @@ async function requestCompletion(conversation, webContext = '', useExistingPendi
 
   let output = '';
   let thinking = assistantMessage.thinking || '';
+  const estimateThinking = incrementalTokenEstimate();
+  estimateThinking(thinking);
+  const estimateOutput = incrementalTokenEstimate();
   let usage = null;
   try {
-    const chatCompletionsBody = {
+    const chatCompletionsBody = () => ({
       model: conversation.model,
       messages: messagesForChatCompletions(conversation, webContext),
       max_tokens: outputTokenBudget(conversation.model),
       stream: true,
       stream_options: { include_usage: true },
       ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {})
-    };
+    });
     // El gateway TensorFold de IAMAC no implementa /responses. Su 404 deja
     // una conexión upstream reutilizable en un estado inconsistente y el
     // siguiente POST puede llegar como parte del método HTTP; usa directamente
     // la ruta OpenAI-compatible que el proveedor sí admite.
-    const useChatCompletionsFirst = /^iamac\//i.test(conversation.model);
+    const useChatCompletionsFirst = /^iamac\//i.test(conversation.model)
+      || (chatCompletionsModels.get(conversation.model) || 0) > Date.now();
     let response;
     let protocol;
     if (useChatCompletionsFirst) {
       response = await fetch(`${state.endpoint}/chat/completions`, {
         method: 'POST',
         headers: { authorization: `Bearer ${state.token}`, 'content-type': 'application/json' },
-        body: JSON.stringify(chatCompletionsBody),
+        body: JSON.stringify(chatCompletionsBody()),
         signal: state.controller.signal
       });
       protocol = 'chat_completions';
@@ -1725,13 +2039,15 @@ async function requestCompletion(conversation, webContext = '', useExistingPendi
       protocol = 'responses';
     }
     if (!useChatCompletionsFirst && !response.ok && await shouldRetryWithChatCompletions(response)) {
+      const rememberCompatibility = [404, 405, 501].includes(response.status);
       response = await fetch(`${state.endpoint}/chat/completions`, {
         method: 'POST',
         headers: { authorization: `Bearer ${state.token}`, 'content-type': 'application/json' },
-        body: JSON.stringify(chatCompletionsBody),
+        body: JSON.stringify(chatCompletionsBody()),
         signal: state.controller.signal
       });
       protocol = 'chat_completions';
+      if (response.ok && rememberCompatibility) chatCompletionsModels.set(conversation.model, Date.now() + 5 * 60_000);
     }
     if (!response.ok) {
       if (response.status === 401) {
@@ -1741,58 +2057,50 @@ async function requestCompletion(conversation, webContext = '', useExistingPendi
       throw new Error(await readError(response));
     }
     if (!response.body) throw new Error('El modelo no ha devuelto un flujo de respuesta.');
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      buffer = consumeSse(buffer, (payload) => {
-        const timing = assistantMessage._timing;
-        const now = performance.now();
-        const choiceDelta = payload.choices?.[0]?.delta || {};
-        const reasoningFragment = [
-          'response.reasoning.delta', 'response.reasoning_text.delta',
-          'response.reasoning_summary.delta', 'response.reasoning_summary_text.delta'
-        ].includes(payload.type) ? payload.delta || '' : choiceDelta.reasoning_content ?? choiceDelta.reasoning ?? '';
-        const anyFragment = payload.type?.endsWith('.delta') && typeof payload.delta === 'string'
-          ? payload.delta
-          : choiceDelta.content ?? reasoningFragment ?? choiceDelta.text ?? '';
-        const fragment = payload.type === 'response.output_text.delta'
-          ? payload.delta || ''
-          : choiceDelta.content ?? choiceDelta.text ?? '';
-        if (reasoningFragment) {
-          thinking += reasoningFragment;
-          assistantMessage.thinking = thinking;
-          const thinkingLabel = $(`.message[data-index="${conversation.messages.length - 1}"] .thinking-label strong`);
-          if (thinkingLabel) thinkingLabel.textContent = 'Thinking';
-          updatePendingMessage(conversation, output, thinking);
-        }
-        if (fragment) {
-          assistantMessage._thinkingComplete = true;
-          if (timing && !timing.firstVisibleAt) timing.firstVisibleAt = now;
-          if (timing) timing.lastVisibleAt = now;
-          output += fragment;
-          updatePendingMessage(conversation, output, thinking);
-        }
-        if (anyFragment && timing) {
-          if (!timing.firstTokenAt) timing.firstTokenAt = now;
-          timing.lastTokenAt = now;
-          timing.samples.push({ at: now, tokens: estimateTokens(thinking) + estimateTokens(output) });
-          timing.generatedTokenEstimate = estimateTokens(thinking) + estimateTokens(output);
-          while (timing.samples.length > 2 && timing.samples[1].at < now - LIVE_RATE_WINDOW_MS) timing.samples.shift();
-        }
-        const upstreamStats = payload.response?.stats || payload.stats;
-        if (upstreamStats && Number.isFinite(upstreamStats.tokens_per_second) && timing) timing.upstreamStats = upstreamStats;
-        const type = payload.type || '';
-        if (protocol === 'chat_completions' && payload.usage) {
-          usage = payload.usage;
-        } else if (type === 'response.completed' || type === 'response.incomplete' || type === 'response.failed') {
-          usage = payload.response?.usage || payload.usage || payload.result?.usage || null;
-        }
-      });
-    }
+    await readSse(response, (payload) => {
+      const timing = assistantMessage._timing;
+      const now = performance.now();
+      const choiceDelta = payload.choices?.[0]?.delta || {};
+      const reasoningFragment = [
+        'response.reasoning.delta', 'response.reasoning_text.delta',
+        'response.reasoning_summary.delta', 'response.reasoning_summary_text.delta'
+      ].includes(payload.type) ? payload.delta || '' : choiceDelta.reasoning_content ?? choiceDelta.reasoning ?? '';
+      const anyFragment = payload.type?.endsWith('.delta') && typeof payload.delta === 'string'
+        ? payload.delta
+        : choiceDelta.content ?? reasoningFragment ?? choiceDelta.text ?? '';
+      const fragment = payload.type === 'response.output_text.delta'
+        ? payload.delta || ''
+        : choiceDelta.content ?? choiceDelta.text ?? '';
+      if (reasoningFragment) {
+        thinking += reasoningFragment;
+        assistantMessage.thinking = thinking;
+        updatePendingMessage(conversation, output, thinking);
+      }
+      if (fragment) {
+        assistantMessage._thinkingComplete = true;
+        if (timing && !timing.firstVisibleAt) timing.firstVisibleAt = now;
+        if (timing) timing.lastVisibleAt = now;
+        output += fragment;
+        updatePendingMessage(conversation, output, thinking);
+      }
+      if ((anyFragment || fragment) && timing) {
+        if (!timing.firstTokenAt) timing.firstTokenAt = now;
+        timing.lastTokenAt = now;
+        timing.generatedTokenEstimate = estimateThinking(reasoningFragment) + estimateOutput(fragment);
+        const lastSample = timing.samples.at(-1);
+        if (lastSample && now - lastSample.at < 100) lastSample.tokens = timing.generatedTokenEstimate;
+        else timing.samples.push({ at: now, tokens: timing.generatedTokenEstimate });
+        while (timing.samples.length > 2 && timing.samples[1].at < now - LIVE_RATE_WINDOW_MS) timing.samples.shift();
+      }
+      const upstreamStats = payload.response?.stats || payload.stats;
+      if (upstreamStats && Number.isFinite(upstreamStats.tokens_per_second) && timing) timing.upstreamStats = upstreamStats;
+      const type = payload.type || '';
+      if (protocol === 'chat_completions' && payload.usage) {
+        usage = payload.usage;
+      } else if (type === 'response.completed' || type === 'response.incomplete' || type === 'response.failed') {
+        usage = payload.response?.usage || payload.usage || payload.result?.usage || null;
+      }
+    });
     if (!output) output = 'El modelo finalizó sin devolver contenido.';
   } catch (error) {
     const aborted = error.name === 'AbortError';
@@ -1800,6 +2108,11 @@ async function requestCompletion(conversation, webContext = '', useExistingPendi
     const message = conversation.messages.at(-1);
     if (message) message.error = !aborted;
   } finally {
+    const viewport = $('#conversation');
+    const follow = viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop < 80;
+    if (pendingMarkdownFrame) cancelAnimationFrame(pendingMarkdownFrame);
+    pendingMarkdownFrame = 0;
+    pendingMessageUpdate = null;
     const message = conversation.messages.at(-1);
     if (message?.role === 'assistant') {
       message.content = output;
@@ -1818,7 +2131,7 @@ async function requestCompletion(conversation, webContext = '', useExistingPendi
     stopLiveStatsTicker();
     setGenerating(false);
     state.controller = null;
-    renderAll();
+    renderAll({ scrollToEnd: follow });
     $('#message-input').focus();
   }
 }
@@ -1896,6 +2209,35 @@ function resizeComposer() {
   input.style.height = `${Math.min(input.scrollHeight, 180)}px`;
 }
 
+function scheduleComposerResize() {
+  if (composerResizeFrame) return;
+  composerResizeFrame = requestAnimationFrame(() => {
+    composerResizeFrame = 0;
+    resizeComposer();
+  });
+}
+
+let viewportResizeFrame = 0;
+function scheduleViewportResize() {
+  if (viewportResizeFrame) return;
+  const follow = conversationNearEnd;
+  viewportResizeFrame = requestAnimationFrame(() => {
+    viewportResizeFrame = 0;
+    const viewport = window.visualViewport;
+    if (viewport && viewport.scale === 1) {
+      document.documentElement.style.setProperty('--chat-height', `${Math.round(viewport.height)}px`);
+    }
+    if (follow) {
+      const conversation = $('#conversation');
+      conversation.scrollTop = conversation.scrollHeight;
+    }
+    scheduleScrollUpdate();
+  });
+}
+window.visualViewport?.addEventListener('resize', scheduleViewportResize, { passive: true });
+window.addEventListener('resize', scheduleViewportResize, { passive: true });
+scheduleViewportResize();
+
 function newChat() {
   if (state.generating) return;
   state.activeId = '';
@@ -1933,7 +2275,7 @@ $('#toggle-token').addEventListener('click', () => {
 });
 
 $('#composer').addEventListener('submit', (event) => { event.preventDefault(); sendMessage($('#message-input').value); });
-$('#message-input').addEventListener('input', resizeComposer);
+$('#message-input').addEventListener('input', scheduleComposerResize);
 $('#message-input').addEventListener('keydown', (event) => {
   if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
     event.preventDefault();
@@ -1981,7 +2323,7 @@ $('#rail-close').addEventListener('click', closeRail);
 $('#model-health-button').addEventListener('click', discardDownModels);
 $('#preview-close').addEventListener('click', closeHtmlPreview);
 $('#jump-to-latest').addEventListener('click', jumpToLatest);
-$('#conversation').addEventListener('scroll', updateJumpToLatestButton, { passive: true });
+$('#conversation').addEventListener('scroll', scheduleScrollUpdate, { passive: true });
 $('#preview-overlay').addEventListener('click', (event) => {
   if (event.target === event.currentTarget) closeHtmlPreview();
 });
