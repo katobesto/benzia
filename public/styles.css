@@ -333,7 +333,7 @@ body { font-size: 15px; }
 .app-shell { grid-template-columns: 260px minmax(0, 1fr); }
 .sidebar { width: 260px; border-right: 0; }
 .brand { height: 60px; padding: 0 21px; gap: 8px; align-items: flex-end; border-bottom: 0; margin-top: 5px; }
-.brand-logo { display: block; flex: 0 1 auto; width: 170px; max-width: 100%; max-height: 36px; height: auto; object-fit: contain; object-position: left center; }
+.brand-logo { display: block; flex: 0 1 auto; width: 136px; max-width: calc(100% - 54px); max-height: 36px; height: auto; object-fit: contain; object-position: left center; }
 .brand-context { flex: 0 0 auto; padding-bottom: 1px; color: var(--muted); font-size: 12px; line-height: 1; letter-spacing: .1em; }
 .brand-icon { width: 28px; height: 28px; border-radius: 50%; box-shadow: none; color: #0d2921; font: 750 15px var(--font); }
 .brand-copy { display: flex; align-items: baseline; gap: 6px; }

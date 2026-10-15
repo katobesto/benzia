@@ -19,7 +19,7 @@ test('dashboard module imports the API helper with a versioned URL and serves it
   assert.match(html, /id="branding-name"/);
   assert.match(html, /id="branding-logo-file"/);
   assert.match(html, /Powered by <strong>benzIA<\/strong>/);
-  assert.match(html, /<a class="brand" href="\/dashboard" aria-label="benzIA"><img class="brand-logo" id="dashboard-brand-logo"/);
+  assert.match(html, /<a class="brand" href="\/dashboard" aria-label="benzIA Console"><img class="brand-logo" id="dashboard-brand-logo"[^>]*><span class="brand-context">CONSOLE<\/span><\/a>/);
   assert.doesNotMatch(html, /dashboard-brand-name/);
   const script = await fetch(`${base}/app.js`);
   assert.equal(script.status, 200);
