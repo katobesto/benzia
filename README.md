@@ -146,7 +146,7 @@ No se guardan prompts, mensajes, embeddings ni respuestas. Cada métrica contien
 | `BRAVE_SEARCH_ENDPOINT` | `https://api.search.brave.com/res/v1/web/search` | Endpoint opcional de contexto web de Brave |
 | `BRAVE_SEARCH_API_KEY` | — | Clave opcional de Brave Search; también configurable desde el panel |
 | `METRICS_RETENTION_DAYS` | `30` | Retención de telemetría |
-| `REQUEST_TIMEOUT_MS` | `300000` | Límite de espera de cabeceras upstream y de respuestas no streaming; los streams no tienen timeout por inactividad ni duración total. |
+| `REQUEST_TIMEOUT_MS` | `900000` | Límite de espera de cabeceras upstream y de respuestas no streaming (15 minutos por defecto); los streams no tienen timeout por inactividad ni duración total. |
 | `RATE_LIMIT_AUTH_PER_MINUTE` | `20` | Intentos fallidos por IP y minuto |
 | `RATE_LIMIT_KEY_PER_MINUTE` | `120` | Solicitudes generales por clave y minuto |
 | `RATE_LIMIT_INFERENCE_PER_MINUTE` | `20` | Inferencias por clave y minuto |

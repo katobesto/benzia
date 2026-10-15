@@ -28,7 +28,7 @@ export function loadConfig() {
     braveSearchEndpoint: normalizeBraveEndpoint(process.env.BRAVE_SEARCH_ENDPOINT || DEFAULT_BRAVE_SEARCH_ENDPOINT),
     braveSearchApiKey: process.env.BRAVE_SEARCH_API_KEY || '',
     dataDir: path.resolve(process.env.DATA_DIR || './data'),
-    requestTimeoutMs: numberFromEnv('REQUEST_TIMEOUT_MS', 300000, { min: 1000, max: 1800000 }),
+    requestTimeoutMs: numberFromEnv('REQUEST_TIMEOUT_MS', 900000, { min: 1000, max: 1800000 }),
     rateLimitAuthPerMinute: numberFromEnv('RATE_LIMIT_AUTH_PER_MINUTE', 20, { min: 1, max: 10000 }),
     rateLimitKeyPerMinute: numberFromEnv('RATE_LIMIT_KEY_PER_MINUTE', 120, { min: 1, max: 100000 }),
     rateLimitInferencePerMinute: numberFromEnv('RATE_LIMIT_INFERENCE_PER_MINUTE', 20, { min: 1, max: 10000 }),
