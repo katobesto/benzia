@@ -7,11 +7,13 @@ import helmet from 'helmet';
 import multer from 'multer';
 
 import { extractAccessToken } from './access-auth.js';
-import { searchBrave, validateSearchQuery } from './brave-search.js';
+import { validateSearchQuery } from './brave-search.js';
 import { DOCUMENT_MAX_BYTES, documentKind, extractDocument } from './document-extractor.js';
 import { jsonBodyErrorHandler } from './http-errors.js';
 import { runResearch } from './research.js';
 import { RateLimiter } from './rate-limit.js';
+import { resolveSearchProvider, runWebSearch } from './web-search.js';
+import { fetchWebPage } from './web-fetch.js';
 
 const chatPublicDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../chat-public');
 const vendorDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../node_modules');
@@ -79,7 +81,7 @@ export function createChatApp({ config, store, rateLimiter: configuredRateLimite
   };
   const applyRateLimit = (req, res, kind) => {
     const key = `key:${req.accessKey.id}:${kind}`;
-    const limit = kind === 'inference' ? (config.rateLimitInferencePerMinute || 20) : (config.rateLimitKeyPerMinute || 120);
+    const limit = kind === 'inference' ? (config.rateLimitInferencePerMinute || 120) : (config.rateLimitKeyPerMinute || 120);
     const result = rateLimiter.consume(key, { type: `${kind}_rate_limit`, route: req.path, identity: req.accessKey.name, addressFingerprint: rateLimiter.addressFingerprint(req) }, limit, false);
     if (result.allowed) return true;
     const event = { type: `${kind}_rate_limit`, route: req.path, identity: req.accessKey.name, addressFingerprint: rateLimiter.addressFingerprint(req), retryAfterSeconds: result.retryAfterSeconds };
@@ -102,7 +104,8 @@ export function createChatApp({ config, store, rateLimiter: configuredRateLimite
     const settings = store.getSettings();
     return {
       endpoint: settings.braveSearchEndpoint || config.braveSearchEndpoint,
-      apiKey: settings.braveSearchApiKey ?? config.braveSearchApiKey
+      apiKey: settings.braveSearchApiKey ?? config.braveSearchApiKey,
+      provider: settings.webSearchProvider || 'auto'
     };
   };
   app.get('/api/branding', (_req, res) => {
@@ -152,10 +155,13 @@ export function createChatApp({ config, store, rateLimiter: configuredRateLimite
     return doc && doc.expiresAt > Date.now() ? doc : null;
   };
   app.get('/api/config', auth, (req, res) => {
+    const settings = braveSettings();
+    const provider = resolveSearchProvider({ provider: settings.provider, hasBraveKey: Boolean(settings.apiKey) });
     res.json({
       endpoint: '/v1',
       identity: { id: req.accessKey.id, name: req.accessKey.name },
-      webSearchAvailable: Boolean(braveSettings().apiKey),
+      webSearchAvailable: provider === 'brave' ? Boolean(settings.apiKey) : true,
+      webSearchProvider: provider,
       paused: Boolean(req.accessKey.pausedAt)
     });
   });
@@ -169,10 +175,26 @@ export function createChatApp({ config, store, rateLimiter: configuredRateLimite
     }
     const settings = braveSettings();
     try {
-      const result = await searchBrave({ endpoint: settings.endpoint, apiKey: settings.apiKey, query });
+      const result = await runWebSearch({
+        settings: { braveSearchEndpoint: settings.endpoint, braveSearchApiKey: settings.apiKey, webSearchProvider: settings.provider },
+        query
+      });
       return res.json(result);
     } catch (error) {
       return res.status(error.status || 502).json({ error: error.message || 'No se pudo completar la búsqueda web.' });
+    }
+  });
+
+  app.post('/api/web-fetch', auth, keyRateLimit, async (req, res) => {
+    const url = typeof req.body?.url === 'string' ? req.body.url.trim().slice(0, 2048) : '';
+    if (!url) return res.status(400).json({ error: 'Indica la dirección de la página que quieres leer.' });
+    const controller = new AbortController();
+    res.once('close', () => controller.abort());
+    try {
+      const page = await fetchWebPage({ url, signal: controller.signal });
+      return res.json(page);
+    } catch (error) {
+      return res.status(error.status || 502).json({ error: error.message || 'No se pudo abrir la página.' });
     }
   });
 

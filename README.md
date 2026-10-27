@@ -77,7 +77,7 @@ Además de las modalidades, cada entrada puede declarar `context_length`, `max_c
 {
   "unsloth/qwen3.8-27b-gguf/qwen3.8-27b-ud-q4_k_s.gguf": {
     "input": ["text"], "output": ["text"],
-    "context_length": 262144, "max_completion_tokens": 32768,
+    "context_length": 262144, "max_completion_tokens": 65536,
     "reasoning_effort": ["none", "low", "medium", "xhigh"]
   }
 }
@@ -149,7 +149,7 @@ No se guardan prompts, mensajes, embeddings ni respuestas. Cada métrica contien
 | `REQUEST_TIMEOUT_MS` | `900000` | Límite de espera de cabeceras upstream y de respuestas no streaming (15 minutos por defecto); los streams no tienen timeout por inactividad ni duración total. |
 | `RATE_LIMIT_AUTH_PER_MINUTE` | `20` | Intentos fallidos por IP y minuto |
 | `RATE_LIMIT_KEY_PER_MINUTE` | `120` | Solicitudes generales por clave y minuto |
-| `RATE_LIMIT_INFERENCE_PER_MINUTE` | `20` | Inferencias por clave y minuto |
+| `RATE_LIMIT_INFERENCE_PER_MINUTE` | `120` | Inferencias por clave y minuto |
 
 Cambiar los puertos requiere reiniciar el proceso. La URL y clave upstream, además de la URL pública que ven los clientes, se pueden actualizar en caliente desde el panel.
 

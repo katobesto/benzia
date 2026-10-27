@@ -206,14 +206,14 @@ test('lee los límites de llama.cpp/NInfer y distingue el máximo de salida del 
   const { context, page, errors } = await openChat();
   t.after(() => context.close());
   const note = page.locator('#model-limit-note');
-  assert.match(await note.textContent(), /Contexto 262k · salida no publicada · petición 32/);
+  assert.match(await note.textContent(), /Contexto 262k · salida no publicada · petición 65/);
   assert.match((await note.getAttribute('title')).replace(/[^\d]/g, ''), /262144/);
   assert.match(await note.getAttribute('title'), /no publica un límite independiente/);
   await page.locator('#model-select').selectOption('fallback-model');
-  assert.match(await note.textContent(), /Contexto 1M · salida máx. 393k · petición 32/);
+  assert.match(await note.textContent(), /Contexto 1M · salida máx. 393k · petición 65/);
   await send(page);
   await complete(page);
-  assert.equal(requests.at(-1).body.max_tokens, 32768);
+  assert.equal(requests.at(-1).body.max_tokens, 65536);
   assert.deepEqual(errors, []);
 });
 

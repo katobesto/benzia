@@ -441,6 +441,7 @@ function renderSettings() {
   $('#upstream-key').placeholder = settings.hasUpstreamApiKey ? 'Configurada · vacío para conservar' : 'Sin autenticación';
   $('#public-gateway-url').value = settings.publicGatewayUrl;
   $('#brave-search-endpoint').value = settings.braveSearchEndpoint;
+  $('#web-search-provider').value = settings.webSearchProvider || 'auto';
   $('#brave-search-key').placeholder = settings.hasBraveSearchApiKey ? 'Configurada · vacío para conservar' : 'Sin configurar';
   const braveStatus = $('#brave-search-status');
   braveStatus.className = `connection-pill ${settings.hasBraveSearchApiKey ? 'online' : ''}`;
@@ -535,7 +536,29 @@ function renderCodexSettings() {
 
 function createExternalProvider() {
   const number = (state.settings.externalProviders?.length || 0) + 1;
-  return { id: `externo-${number}`, originalId: '', name: `Proveedor externo ${number}`, baseUrl: '', apiKey: '', hasApiKey: false, status: null };
+  return { id: `externo-${number}`, originalId: '', name: `Proveedor externo ${number}`, baseUrl: '', apiKey: '', hasApiKey: false, status: null, visibleModels: null, modelCatalog: null, modelSelection: null };
+}
+
+function externalModelsMarkup(provider) {
+  const catalog = Array.isArray(provider.modelCatalog) ? provider.modelCatalog : [];
+  const visible = Array.isArray(provider.visibleModels) ? provider.visibleModels : null;
+  const selection = Array.isArray(provider.modelSelection)
+    ? provider.modelSelection
+    : catalog.map((model) => model.id).filter((id) => !visible || visible.includes(id));
+  const count = catalog.length ? `<span class="external-models-count">${selection.length}/${catalog.length} visibles</span>` : '';
+  const list = catalog.length
+    ? `<div class="external-models-list">${catalog.map((model) => `
+        <label class="external-model-item"><input type="checkbox" data-external-model="${escapeHtml(model.id)}" ${selection.includes(model.id) ? 'checked' : ''}><span>${escapeHtml(model.name || model.id)}</span></label>`).join('')}</div>`
+    : '<div class="external-models-empty">Pulsa <strong>Actualizar</strong> para ver los modelos que expone el proveedor y desmarca los que no quieras publicar.</div>';
+  return `<div class="external-provider-models">
+    <div class="external-models-head"><span class="external-field-title">Modelos visibles${count}</span>
+      <div class="external-models-actions">
+        <button class="secondary-button refresh-external-models" type="button">Actualizar</button>
+        <button class="secondary-button save-external-models" type="button" ${catalog.length ? '' : 'disabled'}>Guardar modelos visibles</button>
+      </div>
+    </div>
+    ${list}
+  </div>`;
 }
 
 function renderExternalProviders() {
@@ -555,7 +578,7 @@ function renderExternalProviders() {
         <label><span class="external-field-title">URL OpenAI-compatible</span><input data-external-field="baseUrl" type="url" value="${escapeHtml(provider.baseUrl)}" required placeholder="https://api.openai.com"><small>Acepta la URL base con o sin <code>/v1</code>.</small></label>
         <label><span class="external-field-title">Token del proveedor <span class="optional">Opcional</span></span><input data-external-field="apiKey" type="password" value="" autocomplete="new-password" placeholder="${provider.hasApiKey ? 'Configurado · vacío para conservar' : 'Sin autenticación'}"><small>Se guarda sólo en el servidor.</small></label>
       </div>
-      <div class="external-provider-tools"><button class="secondary-button test-external-provider" type="button">Probar y consultar modelos</button><span>benzIA consultará <code>GET /v1/models</code> dinámicamente</span></div>
+      ${externalModelsMarkup(provider)}
     </article>`;
   }).join('');
 }
@@ -1041,9 +1064,24 @@ $('#public-gateway-url').addEventListener('input', updateEndpointPreview);
 $('#add-external-provider').addEventListener('click', () => { state.settings.externalProviders.push(createExternalProvider()); renderExternalProviders(); });
 $('#external-providers').addEventListener('input', (event) => {
   const card = event.target.closest('.external-provider');
-  const field = event.target.dataset.externalField;
   const provider = state.settings.externalProviders[Number(card?.dataset.providerIndex)];
-  if (!provider || !field) return;
+  if (!provider) return;
+  const modelId = event.target.dataset.externalModel;
+  if (modelId) {
+    if (!Array.isArray(provider.modelSelection)) {
+      const visible = Array.isArray(provider.visibleModels) ? provider.visibleModels : null;
+      provider.modelSelection = (Array.isArray(provider.modelCatalog) ? provider.modelCatalog : [])
+        .map((model) => model.id).filter((id) => !visible || visible.includes(id));
+    }
+    if (event.target.checked) {
+      if (!provider.modelSelection.includes(modelId)) provider.modelSelection.push(modelId);
+    } else {
+      provider.modelSelection = provider.modelSelection.filter((id) => id !== modelId);
+    }
+    return;
+  }
+  const field = event.target.dataset.externalField;
+  if (!field) return;
   provider[field] = event.target.value;
   if (field === 'name') card.querySelector('.external-provider-head strong').textContent = event.target.value || 'Proveedor externo';
 });
@@ -1057,13 +1095,34 @@ $('#external-providers').addEventListener('click', async (event) => {
     renderExternalProviders();
     return;
   }
-  if (!event.target.closest('.test-external-provider')) return;
-  provider.status = { online: false, message: 'Consultando…' };
-  renderExternalProviders();
-  try {
-    const result = await api('/admin/api/external-providers/test', { method: 'POST', body: JSON.stringify(provider) });
-    provider.status = { online: true, message: `${result.models.length} modelo(s) · ${result.latencyMs} ms` };
-  } catch (error) { provider.status = { online: false, message: error.message }; }
+  if (event.target.closest('.refresh-external-models')) {
+    provider.status = { online: false, message: 'Consultando…' };
+    renderExternalProviders();
+    try {
+      const result = await api('/admin/api/external-providers/test', { method: 'POST', body: JSON.stringify(provider) });
+      provider.status = { online: true, message: `${result.models.length} modelo(s) · ${result.latencyMs} ms` };
+      provider.modelCatalog = result.models;
+      const visible = Array.isArray(provider.visibleModels) ? provider.visibleModels : null;
+      provider.modelSelection = result.models.map((model) => model.id).filter((id) => !visible || visible.includes(id));
+    } catch (error) { provider.status = { online: false, message: error.message }; }
+    renderExternalProviders();
+    return;
+  }
+  if (!event.target.closest('.save-external-models')) return;
+  const catalog = Array.isArray(provider.modelCatalog) ? provider.modelCatalog : [];
+  if (!catalog.length) return;
+  const selection = Array.isArray(provider.modelSelection) ? provider.modelSelection : [];
+  const value = selection.length === catalog.length ? null : selection;
+  if (provider.originalId) {
+    try {
+      await api(`/admin/api/external-providers/${encodeURIComponent(provider.originalId)}/visible-models`, { method: 'PATCH', body: JSON.stringify({ visibleModels: value }) });
+      provider.visibleModels = value;
+      toast(value ? `Publicando ${value.length} de ${catalog.length} modelos de ${provider.name || 'este proveedor'}` : 'Todos los modelos del proveedor son visibles');
+    } catch (error) { toast(error.message); }
+  } else {
+    provider.visibleModels = value;
+    toast('Modelos pendientes de guardar con la configuración del proveedor');
+  }
   renderExternalProviders();
 });
 
@@ -1121,7 +1180,8 @@ $('#settings-form').addEventListener('submit', async (event) => {
       upstreamBaseUrl: $('#upstream-url').value,
       publicGatewayUrl: $('#public-gateway-url').value,
       braveSearchEndpoint: $('#brave-search-endpoint').value,
-      externalProviders: (state.settings.externalProviders || []).map((provider) => ({ id: provider.id, originalId: provider.originalId, name: provider.name, baseUrl: provider.baseUrl, apiKey: provider.apiKey, keepApiKey: provider.hasApiKey && !provider.apiKey })),
+      webSearchProvider: $('#web-search-provider').value,
+      externalProviders: (state.settings.externalProviders || []).map((provider) => ({ id: provider.id, originalId: provider.originalId, name: provider.name, baseUrl: provider.baseUrl, apiKey: provider.apiKey, keepApiKey: provider.hasApiKey && !provider.apiKey, visibleModels: provider.visibleModels ?? null })),
       codexSelectedModel: $('#codex-model-select').value,
       branding: { name: $('#branding-name').value, logoDataUrl: state.settings.branding.logoDataUrl },
       ...(upstreamApiKey ? { upstreamApiKey } : {}),

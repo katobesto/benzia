@@ -27,12 +27,37 @@ export function sanitizeExternalProviders(value, previous = []) {
     const previousId = typeof raw.originalId === 'string' ? raw.originalId : id;
     const apiKey = apiKeyInput || (raw.keepApiKey ? previousById.get(previousId)?.apiKey || '' : '');
     if (apiKey.length > 2000) throw new Error(`El token de “${name}” es demasiado largo.`);
-    return { id, name, baseUrl: normalizeProviderBaseUrl(raw.baseUrl), apiKey };
+    const visibleModels = raw.visibleModels === undefined
+      ? previousById.get(previousId)?.visibleModels ?? null
+      : normalizeVisibleModels(raw.visibleModels);
+    return { id, name, baseUrl: normalizeProviderBaseUrl(raw.baseUrl), apiKey, visibleModels };
   });
 }
 
+// null means "every model the provider publishes is visible"; an array is an
+// allow-list of upstream model IDs (empty array hides the whole provider).
+export function normalizeVisibleModels(value) {
+  if (value === null) return null;
+  if (!Array.isArray(value)) throw new Error('La lista de modelos visibles no es válida.');
+  if (value.length > 500) throw new Error('Se admiten hasta 500 modelos visibles por proveedor.');
+  const seen = new Set();
+  const models = [];
+  for (const model of value) {
+    const id = typeof model === 'string' ? model.trim() : '';
+    if (!id || id.length > 200) throw new Error('Cada modelo visible debe ser un ID de 1 a 200 caracteres.');
+    if (!seen.has(id)) {
+      seen.add(id);
+      models.push(id);
+    }
+  }
+  return models;
+}
+
 export function publicExternalProviders(providers = []) {
-  return providers.map(({ id, name, baseUrl, apiKey }) => ({ id, name, baseUrl, hasApiKey: Boolean(apiKey) }));
+  return providers.map(({ id, name, baseUrl, apiKey, visibleModels }) => ({
+    id, name, baseUrl, hasApiKey: Boolean(apiKey),
+    visibleModels: Array.isArray(visibleModels) ? [...visibleModels] : null
+  }));
 }
 
 async function requestProviderModels(provider, { timeoutMs = 8000 } = {}) {

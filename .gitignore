@@ -11,3 +11,5 @@ logs/
 bz-harness-macos-arm64
 bz-harness-macos-arm64.config
 
+*.log
+*.deb

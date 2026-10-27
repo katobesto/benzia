@@ -254,7 +254,7 @@ export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, 
 
     const inferred = req.method === 'POST' && INFERENCE_PATHS.has(req.path);
     const ip = req.rateLimitAddress || 'unknown';
-    const limit = inferred ? (config.rateLimitInferencePerMinute || 20) : (config.rateLimitKeyPerMinute || 120);
+    const limit = inferred ? (config.rateLimitInferencePerMinute || 120) : (config.rateLimitKeyPerMinute || 120);
     const keyResult = rateLimiter.consume(`key:${accessKey.id}:${inferred ? 'inference' : 'general'}`, {
       type: inferred ? 'inference_rate_limit' : 'key_rate_limit', route: req.path,
       identity: accessKey.name, addressFingerprint: rateLimiter.addressFingerprint(req)
@@ -316,7 +316,10 @@ export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, 
       const externalModels = providers.flatMap((provider, index) => {
         const result = results[index + 1];
         if (result.status !== 'fulfilled') return [];
-        return result.value.map((model) => ({ ...model, id: `${provider.id}/${model.id}`, owned_by: provider.name, benzIA_provider: { id: provider.id, name: provider.name, external: true } }));
+        const visible = Array.isArray(provider.visibleModels) ? new Set(provider.visibleModels) : null;
+        return result.value
+          .filter((model) => !visible || visible.has(model.id))
+          .map((model) => ({ ...model, id: `${provider.id}/${model.id}`, owned_by: provider.name, benzIA_provider: { id: provider.id, name: provider.name, external: true } }));
       });
       const failed = [...(results[0].status === 'rejected' ? ['local'] : []), ...providers.filter((_provider, index) => results[index + 1].status === 'rejected').map((provider) => provider.id)];
       if (failed.length) res.set('x-benzia-provider-errors', failed.join(','));
@@ -339,6 +342,9 @@ export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, 
     }
     if (externalRoute && accessKey.externalProviderIds && !accessKey.externalProviderIds.includes(externalRoute.provider.id)) {
       return res.status(403).json(safeError(403, 'Este token no tiene acceso a ese proveedor externo.', 'external_provider_forbidden'));
+    }
+    if (externalRoute && Array.isArray(externalRoute.provider.visibleModels) && !externalRoute.provider.visibleModels.includes(externalRoute.upstreamModel)) {
+      return res.status(404).json(safeError(404, 'El modelo solicitado no está publicado por este proveedor.', 'model_not_found'));
     }
     const selectedProvider = codexRoute ? { id: 'openai', name: 'OpenAI Codex', baseUrl: 'codex://app-server', apiKey: '' } : externalRoute?.provider || {
       id: 'local', name: 'Proveedor IA Local', baseUrl: settings.upstreamBaseUrl, apiKey: settings.upstreamApiKey

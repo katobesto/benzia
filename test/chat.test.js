@@ -11,7 +11,7 @@ async function listen(app) {
 
 test('sirve la interfaz de chat sin exponer su configuración', async (t) => {
   const store = {
-    getSettings: () => ({ publicGatewayUrl: 'https://gateway.example.test' }),
+    getSettings: () => ({ publicGatewayUrl: 'https://gateway.example.test', webSearchProvider: 'brave' }),
     findKeyByToken: (token) => token === 'valid-user-token'
       ? { id: 'key-1', name: 'Equipo QA', pausedAt: null, revokedAt: null }
       : token === 'paused-user-token'
@@ -88,6 +88,7 @@ test('sirve la interfaz de chat sin exponer su configuración', async (t) => {
     endpoint: '/v1',
     identity: { id: 'key-2', name: 'Equipo pausado' },
     webSearchAvailable: false,
+    webSearchProvider: 'brave',
     paused: true
   });
 
@@ -97,6 +98,7 @@ test('sirve la interfaz de chat sin exponer su configuración', async (t) => {
     endpoint: '/v1',
     identity: { id: 'key-1', name: 'Equipo QA' },
     webSearchAvailable: false,
+    webSearchProvider: 'brave',
     paused: false
   });
 

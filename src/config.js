@@ -31,7 +31,7 @@ export function loadConfig() {
     requestTimeoutMs: numberFromEnv('REQUEST_TIMEOUT_MS', 900000, { min: 1000, max: 1800000 }),
     rateLimitAuthPerMinute: numberFromEnv('RATE_LIMIT_AUTH_PER_MINUTE', 20, { min: 1, max: 10000 }),
     rateLimitKeyPerMinute: numberFromEnv('RATE_LIMIT_KEY_PER_MINUTE', 120, { min: 1, max: 100000 }),
-    rateLimitInferencePerMinute: numberFromEnv('RATE_LIMIT_INFERENCE_PER_MINUTE', 20, { min: 1, max: 10000 }),
+    rateLimitInferencePerMinute: numberFromEnv('RATE_LIMIT_INFERENCE_PER_MINUTE', 120, { min: 1, max: 10000 }),
     researchPlannerModel: process.env.RESEARCH_PLANNER_MODEL || '',
     researchDirectSearch: process.env.RESEARCH_DIRECT_SEARCH === 'true',
     maxConcurrentInference: numberFromEnv('MAX_CONCURRENT_INFERENCE', 0, { min: 0, max: 1000 }),

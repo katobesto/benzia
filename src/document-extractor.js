@@ -25,7 +25,7 @@ function cleanExtractedText(value) {
   };
 }
 
-async function extractPdf(buffer) {
+export async function extractPdf(buffer) {
   const { getDocument, VerbosityLevel } = await import('pdfjs-dist/legacy/build/pdf.mjs');
   const loadingTask = getDocument({
     data: new Uint8Array(buffer),

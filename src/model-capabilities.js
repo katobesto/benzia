@@ -32,7 +32,7 @@ export function reasoningEffortsForModel(modelId, capabilities = {}) {
  * {
  *   "unsloth/qwen3.8-27b-gguf/qwen3.8-27b-ud-q4_k_s.gguf": {
  *     "input": ["text"], "output": ["text"], "context_length": 262144,
- *     "max_completion_tokens": 32768, "reasoning_effort": ["none", "low", "medium", "xhigh"]
+ *     "max_completion_tokens": 65536, "reasoning_effort": ["none", "low", "medium", "xhigh"]
  *   },
  *   "qwen2.5-vl-7b-instruct-q4_k_m.gguf": { "input": ["text", "image"] }
  * }

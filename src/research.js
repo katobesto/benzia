@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 
-import { searchBrave } from './brave-search.js';
+import { resolveSearchProvider, runWebSearch } from './web-search.js';
 import { extractUsage } from './usage.js';
 import { routeForModel } from './providers.js';
 
@@ -114,12 +114,13 @@ export async function runResearch({ config, store, accessKey, model, messages, e
     upstreamApiKey: stored.upstreamApiKey ?? config.upstreamApiKey,
     braveSearchEndpoint: stored.braveSearchEndpoint || config.braveSearchEndpoint,
     braveSearchApiKey: stored.braveSearchApiKey ?? config.braveSearchApiKey,
+    webSearchProvider: stored.webSearchProvider || 'auto',
     externalProviders: Array.isArray(stored.externalProviders) ? stored.externalProviders : []
   };
   const safeMessages = normalizeResearchMessages(messages);
   if (!safeMessages.length) throw new Error('No hay contexto suficiente para investigar.');
-  if (!settings.braveSearchApiKey) {
-    const error = new Error('La búsqueda web no está configurada. Pide al administrador que añada la clave de Brave.');
+  if (resolveSearchProvider({ provider: settings.webSearchProvider, hasBraveKey: Boolean(settings.braveSearchApiKey) }) === 'brave' && !settings.braveSearchApiKey) {
+    const error = new Error('La búsqueda web no está configurada. Pide al administrador que añada la clave de Brave o cambie el buscador a DuckDuckGo.');
     error.status = 503;
     throw error;
   }
@@ -135,7 +136,7 @@ export async function runResearch({ config, store, accessKey, model, messages, e
   emit('research.status', { step: 'searching', label: `Buscando ${plan.queries.length} fuente${plan.queries.length === 1 ? '' : 's'} de información` });
 
   const settled = await Promise.allSettled(plan.queries.map(async (query, index) => {
-    const result = await searchBrave({ endpoint: settings.braveSearchEndpoint, apiKey: settings.braveSearchApiKey, query, signal });
+    const result = await runWebSearch({ settings, query, signal });
     emit('research.search', { index: index + 1, total: plan.queries.length, query, sources: result.sources.length });
     return result;
   }));

@@ -8,9 +8,10 @@ import helmet from 'helmet';
 
 import { adminAuth } from './admin-auth.js';
 import { DEFAULT_BRAVE_SEARCH_ENDPOINT, normalizeBraveEndpoint } from './brave-search.js';
+import { normalizeSearchProvider } from './web-search.js';
 import { CAPABILITIES_FILENAME, loadModelCapabilities, sanitizeModelCapabilities } from './model-capabilities.js';
 import { buildOverviewPayload } from './overview.js';
-import { fetchProviderModels, normalizeProviderBaseUrl, publicExternalProviders, sanitizeExternalProviders, PROVIDER_ID_PATTERN } from './providers.js';
+import { fetchProviderModels, normalizeProviderBaseUrl, normalizeVisibleModels, publicExternalProviders, sanitizeExternalProviders, PROVIDER_ID_PATTERN } from './providers.js';
 import { jsonBodyErrorHandler } from './http-errors.js';
 import { normalizeCodexModels } from './codex-provider.js';
 
@@ -344,6 +345,7 @@ export function createAdminApp({ config, store, liveActivity }) {
       publicGatewayUrl: settings.publicGatewayUrl || config.publicGatewayUrl,
       braveSearchEndpoint: settings.braveSearchEndpoint || config.braveSearchEndpoint || DEFAULT_BRAVE_SEARCH_ENDPOINT,
       hasBraveSearchApiKey,
+      webSearchProvider: normalizeSearchProvider(settings.webSearchProvider),
       externalProviders: publicExternalProviders(externalProviders),
       branding: sanitizeBranding(settings.branding || {}),
       codexOpenAI: { connected: Boolean(settings.codexOpenAI?.connected), selectedModel: settings.codexOpenAI?.selectedModel || '', models: settings.codexOpenAI?.models || [] },
@@ -383,6 +385,7 @@ export function createAdminApp({ config, store, liveActivity }) {
     }
     if (typeof req.body.braveSearchApiKey === 'string' && req.body.braveSearchApiKey.length) patch.braveSearchApiKey = req.body.braveSearchApiKey.trim();
     if (req.body.clearBraveSearchApiKey === true) patch.braveSearchApiKey = '';
+    if ('webSearchProvider' in req.body) patch.webSearchProvider = normalizeSearchProvider(req.body.webSearchProvider);
     if ('externalProviders' in req.body) {
       try {
         const previous = Array.isArray(store.getSettings().externalProviders) ? store.getSettings().externalProviders : [];
@@ -514,6 +517,26 @@ export function createAdminApp({ config, store, liveActivity }) {
     } catch (error) {
       return res.status(502).json({ online: false, latencyMs: Date.now() - startedAt, error: `No se pudieron consultar los modelos (${error.message}).` });
     }
+  });
+
+  app.patch('/admin/api/external-providers/:id/visible-models', auth, async (req, res) => {
+    const providerId = typeof req.params.id === 'string' ? req.params.id.trim().toLowerCase() : '';
+    if (!PROVIDER_ID_PATTERN.test(providerId)) return res.status(400).json({ error: 'El ID de proveedor no es válido.' });
+    let visibleModels;
+    try {
+      visibleModels = normalizeVisibleModels(req.body?.visibleModels ?? null);
+    } catch (error) {
+      return res.status(400).json({ error: error.message || 'La lista de modelos visibles no es válida.' });
+    }
+    const settings = store.getSettings();
+    const providers = Array.isArray(settings.externalProviders) ? settings.externalProviders : [];
+    if (!providers.some((provider) => provider.id === providerId)) {
+      return res.status(404).json({ error: 'Proveedor no encontrado. Guárdalo primero en la configuración.' });
+    }
+    await store.updateSettings({
+      externalProviders: providers.map((provider) => provider.id === providerId ? { ...provider, visibleModels } : provider)
+    });
+    res.json({ updated: true, visibleModels });
   });
 
   // This endpoint is deliberately server-side: the dashboard never connects

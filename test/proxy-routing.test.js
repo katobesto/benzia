@@ -766,3 +766,68 @@ test('Codex turn holds its inference slot until the turn completes', async (t) =
   assert.ok(firstTail.includes('[DONE]'));
   assert.ok((await second.text()).includes('answer-2'));
 });
+
+test('oculta los modelos externos no marcados como visibles y rechaza su inferencia', async (t) => {
+  const local = express();
+  local.get('/v1/models', (_req, res) => res.json({ object: 'list', data: [{ id: 'modelo-local', object: 'model' }] }));
+  const localServer = local.listen(0, '127.0.0.1');
+  await new Promise((resolve) => localServer.once('listening', resolve));
+  t.after(() => new Promise((resolve) => localServer.close(resolve)));
+
+  let externalBody;
+  const external = express();
+  external.use(express.json());
+  external.get('/v1/models', (_req, res) => res.json({
+    object: 'list',
+    data: [
+      { id: 'modelo-publico', object: 'model' },
+      { id: 'modelo-oculto', object: 'model' },
+      { id: 'otro-oculto', object: 'model' }
+    ]
+  }));
+  external.post('/v1/chat/completions', (req, res) => {
+    externalBody = req.body;
+    res.json({ choices: [{ message: { content: 'OK' } }], usage: { prompt_tokens: 1, completion_tokens: 1 } });
+  });
+  const externalServer = external.listen(0, '127.0.0.1');
+  await new Promise((resolve) => externalServer.once('listening', resolve));
+  t.after(() => new Promise((resolve) => externalServer.close(resolve)));
+
+  const store = {
+    getSettings: () => ({
+      externalProviders: [{
+        id: 'cloud', name: 'Cloud IA', baseUrl: `http://127.0.0.1:${externalServer.address().port}`,
+        apiKey: '', visibleModels: ['modelo-publico']
+      }]
+    }),
+    findKeyByToken: () => ({ id: 'key', name: 'Externo', allowExternalProviders: true }),
+    recordMetric: async () => {}
+  };
+  const gateway = createGatewayApp({
+    config: { upstreamBaseUrl: `http://127.0.0.1:${localServer.address().port}`, upstreamApiKey: '', requestTimeoutMs: 5000 },
+    store
+  });
+  const gatewayServer = gateway.listen(0, '127.0.0.1');
+  await new Promise((resolve) => gatewayServer.once('listening', resolve));
+  t.after(() => new Promise((resolve) => gatewayServer.close(resolve)));
+  const baseUrl = `http://127.0.0.1:${gatewayServer.address().port}/v1`;
+  const headers = { authorization: 'Bearer key', 'content-type': 'application/json' };
+
+  const models = await fetch(`${baseUrl}/models`, { headers });
+  assert.equal(models.status, 200);
+  assert.deepEqual((await models.json()).data.map((model) => model.id), ['modelo-local', 'cloud/modelo-publico']);
+
+  const hidden = await fetch(`${baseUrl}/chat/completions`, {
+    method: 'POST', headers,
+    body: JSON.stringify({ model: 'cloud/modelo-oculto', messages: [{ role: 'user', content: 'Hola' }] })
+  });
+  assert.equal(hidden.status, 404);
+  assert.equal((await hidden.json()).error.type, 'model_not_found');
+
+  const visible = await fetch(`${baseUrl}/chat/completions`, {
+    method: 'POST', headers,
+    body: JSON.stringify({ model: 'cloud/modelo-publico', messages: [{ role: 'user', content: 'Hola' }] })
+  });
+  assert.equal(visible.status, 200);
+  assert.equal(externalBody.model, 'modelo-publico');
+});
