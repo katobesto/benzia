@@ -53,9 +53,15 @@ function plannerPrompt(messages) {
 }
 
 export function canPlanWithExternalProvider(externalRoute, accessKey = {}) {
-  if (!externalRoute) return true;
+  if (!externalRoute) return canPlanWithLocalProvider(accessKey);
   if (!accessKey.allowExternalProviders) return false;
   return accessKey.externalProviderIds == null || accessKey.externalProviderIds.includes(externalRoute.provider.id);
+}
+
+// El planificador de investigación usa el mismo modelo que la conversación.
+// Si el token no tiene acceso al proveedor local, tampoco puede llamarlo aqui.
+export function canPlanWithLocalProvider(accessKey = {}) {
+  return accessKey.localModelAllowed !== false;
 }
 
 async function planWithModel({ config, settings, model, messages, accessKey, store, signal }) {

@@ -258,7 +258,14 @@ export function createAdminApp({ config, store, liveActivity }) {
   app.post('/admin/api/keys', auth, async (req, res) => {
     if (!validName(req.body?.name)) return res.status(400).json({ error: 'El nombre debe contener entre 2 y 80 caracteres.' });
     if ('allowExternalProviders' in req.body && typeof req.body.allowExternalProviders !== 'boolean') return res.status(400).json({ error: 'El acceso a proveedores externos debe ser verdadero o falso.' });
-    const created = await store.createKey(req.body.name.trim(), { allowExternalProviders: req.body.allowExternalProviders === true });
+    if ('localModelAllowed' in req.body && typeof req.body.localModelAllowed !== 'boolean') return res.status(400).json({ error: 'El acceso al proveedor local debe ser verdadero o falso.' });
+    if (req.body.localModelAllowed === false && req.body.allowExternalProviders !== true) {
+      return res.status(400).json({ error: 'La clave debe poder usar al menos el proveedor local o los externos.' });
+    }
+    const created = await store.createKey(req.body.name.trim(), {
+      allowExternalProviders: req.body.allowExternalProviders === true,
+      localModelAllowed: req.body.localModelAllowed !== false
+    });
     res.status(201).json({ key: created, notice: 'Guarde el token ahora: no volverá a mostrarse.' });
   });
 
@@ -280,9 +287,11 @@ export function createAdminApp({ config, store, liveActivity }) {
 
   app.patch('/admin/api/keys/:id/providers', auth, async (req, res) => {
     const hasAccessLevel = 'allowExternalProviders' in req.body;
+    const hasLocalAccess = 'localModelAllowed' in req.body;
     const hasFilter = 'providerIds' in req.body;
-    if (!hasAccessLevel && !hasFilter) return res.status(400).json({ error: 'Indica el nivel de acceso o los proveedores visibles.' });
+    if (!hasAccessLevel && !hasFilter && !hasLocalAccess) return res.status(400).json({ error: 'Indica el nivel de acceso o los proveedores visibles.' });
     if (hasAccessLevel && typeof req.body.allowExternalProviders !== 'boolean') return res.status(400).json({ error: 'El acceso a proveedores externos debe ser verdadero o falso.' });
+    if (hasLocalAccess && typeof req.body.localModelAllowed !== 'boolean') return res.status(400).json({ error: 'El acceso al proveedor local debe ser verdadero o falso.' });
     let providerIds;
     if (hasFilter) {
       if (req.body.providerIds !== null) {
@@ -300,7 +309,21 @@ export function createAdminApp({ config, store, liveActivity }) {
       }
     }
     if (hasAccessLevel && req.body.allowExternalProviders === false) providerIds = null;
-    const key = await store.setKeyExternalAccess(req.params.id, hasAccessLevel ? req.body.allowExternalProviders : undefined, providerIds);
+    // Se valida la combinacion resultante (no solo lo que llega en esta
+    // peticion) para no dejar una clave sin ningun origen de modelos.
+    const currentKey = store.listKeys().find((item) => item.id === req.params.id);
+    if (!currentKey) return res.status(404).json({ error: 'Clave no encontrada.' });
+    const resultingLocal = hasLocalAccess ? req.body.localModelAllowed : currentKey.localModelAllowed;
+    const resultingExternal = hasAccessLevel ? req.body.allowExternalProviders : currentKey.allowExternalProviders;
+    if (resultingLocal === false && resultingExternal === false) {
+      return res.status(400).json({ error: 'La clave debe poder usar al menos el proveedor local o los externos.' });
+    }
+    const key = await store.setKeyExternalAccess(
+      req.params.id,
+      hasAccessLevel ? req.body.allowExternalProviders : undefined,
+      providerIds,
+      hasLocalAccess ? req.body.localModelAllowed : undefined
+    );
     if (!key) return res.status(404).json({ error: 'Clave no encontrada.' });
     res.json({ key });
   });

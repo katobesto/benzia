@@ -78,6 +78,7 @@ export class SqliteStore {
         revoked_at TEXT,
         last_used_at TEXT,
         allow_external_providers INTEGER NOT NULL DEFAULT 0,
+        local_model_allowed INTEGER NOT NULL DEFAULT 1,
         external_provider_ids TEXT,
         token_limit INTEGER,
         consumed_tokens INTEGER NOT NULL DEFAULT 0,
@@ -115,6 +116,9 @@ export class SqliteStore {
     if (!accessKeyColumns.has('paused_message')) this.db.exec('ALTER TABLE access_keys ADD COLUMN paused_message TEXT');
     if (!accessKeyColumns.has('allow_external_providers')) this.db.exec('ALTER TABLE access_keys ADD COLUMN allow_external_providers INTEGER NOT NULL DEFAULT 0');
     if (!accessKeyColumns.has('external_provider_ids')) this.db.exec('ALTER TABLE access_keys ADD COLUMN external_provider_ids TEXT');
+    // 1 = el token puede ver y usar el proveedor local. El defecto 1 mantiene
+    // el comportamiento de todas las claves ya creadas.
+    if (!accessKeyColumns.has('local_model_allowed')) this.db.exec('ALTER TABLE access_keys ADD COLUMN local_model_allowed INTEGER NOT NULL DEFAULT 1');
     if (!accessKeyColumns.has('token_limit')) this.db.exec('ALTER TABLE access_keys ADD COLUMN token_limit INTEGER');
     const hadConsumedTokens = accessKeyColumns.has('consumed_tokens');
     if (!hadConsumedTokens) {
@@ -147,20 +151,20 @@ export class SqliteStore {
       ON CONFLICT(id) DO UPDATE SET data_json = excluded.data_json
     `);
     this.statements.keysList = this.db.prepare(`
-      SELECT id, name, prefix, created_at AS createdAt, paused_at AS pausedAt, paused_message AS pausedMessage, revoked_at AS revokedAt, last_used_at AS lastUsedAt, allow_external_providers AS allowExternalProviders, external_provider_ids AS externalProviderIds, token_limit AS tokenLimit, consumed_tokens AS consumedTokens, cached_tokens AS cachedTokens
+      SELECT id, name, prefix, created_at AS createdAt, paused_at AS pausedAt, paused_message AS pausedMessage, revoked_at AS revokedAt, last_used_at AS lastUsedAt, allow_external_providers AS allowExternalProviders, local_model_allowed AS localModelAllowed, external_provider_ids AS externalProviderIds, token_limit AS tokenLimit, consumed_tokens AS consumedTokens, cached_tokens AS cachedTokens
       FROM access_keys ORDER BY created_at ASC
     `);
     this.statements.keyByHash = this.db.prepare(`
-      SELECT id, name, prefix, created_at AS createdAt, paused_at AS pausedAt, paused_message AS pausedMessage, revoked_at AS revokedAt, last_used_at AS lastUsedAt, allow_external_providers AS allowExternalProviders, external_provider_ids AS externalProviderIds, token_limit AS tokenLimit, consumed_tokens AS consumedTokens, cached_tokens AS cachedTokens
+      SELECT id, name, prefix, created_at AS createdAt, paused_at AS pausedAt, paused_message AS pausedMessage, revoked_at AS revokedAt, last_used_at AS lastUsedAt, allow_external_providers AS allowExternalProviders, local_model_allowed AS localModelAllowed, external_provider_ids AS externalProviderIds, token_limit AS tokenLimit, consumed_tokens AS consumedTokens, cached_tokens AS cachedTokens
       FROM access_keys WHERE token_hash = ? AND paused_at IS NULL AND revoked_at IS NULL
     `);
     this.statements.keyByHashAnyState = this.db.prepare(`
-      SELECT id, name, prefix, created_at AS createdAt, paused_at AS pausedAt, paused_message AS pausedMessage, revoked_at AS revokedAt, last_used_at AS lastUsedAt, allow_external_providers AS allowExternalProviders, external_provider_ids AS externalProviderIds, token_limit AS tokenLimit, consumed_tokens AS consumedTokens, cached_tokens AS cachedTokens
+      SELECT id, name, prefix, created_at AS createdAt, paused_at AS pausedAt, paused_message AS pausedMessage, revoked_at AS revokedAt, last_used_at AS lastUsedAt, allow_external_providers AS allowExternalProviders, local_model_allowed AS localModelAllowed, external_provider_ids AS externalProviderIds, token_limit AS tokenLimit, consumed_tokens AS consumedTokens, cached_tokens AS cachedTokens
       FROM access_keys WHERE token_hash = ?
     `);
     this.statements.keyInsert = this.db.prepare(`
-      INSERT INTO access_keys (id, name, prefix, token_hash, created_at, paused_at, paused_message, revoked_at, last_used_at, allow_external_providers, external_provider_ids)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO access_keys (id, name, prefix, token_hash, created_at, paused_at, paused_message, revoked_at, last_used_at, allow_external_providers, local_model_allowed, external_provider_ids)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     this.statements.keyPause = this.db.prepare('UPDATE access_keys SET paused_at = COALESCE(paused_at, ?), paused_message = ? WHERE id = ? AND revoked_at IS NULL');
     this.statements.keyResume = this.db.prepare('UPDATE access_keys SET paused_at = NULL WHERE id = ? AND revoked_at IS NULL');
@@ -169,7 +173,7 @@ export class SqliteStore {
     this.statements.keyTokenLimit = this.db.prepare('UPDATE access_keys SET token_limit = ? WHERE id = ?');
     this.statements.keyStats = this.db.prepare('SELECT token_limit AS tokenLimit, consumed_tokens AS consumedTokens, cached_tokens AS cachedTokens, uncached_input_tokens AS uncachedInputTokens, cache_reported_input_tokens AS cacheReportedInputTokens FROM access_keys WHERE id = ?');
     this.statements.keyRename = this.db.prepare('UPDATE access_keys SET name = ? WHERE id = ?');
-    this.statements.keyExternalAccess = this.db.prepare('UPDATE access_keys SET allow_external_providers = ?, external_provider_ids = ? WHERE id = ? AND revoked_at IS NULL');
+    this.statements.keyExternalAccess = this.db.prepare('UPDATE access_keys SET allow_external_providers = ?, local_model_allowed = ?, external_provider_ids = ? WHERE id = ? AND revoked_at IS NULL');
     this.statements.keyTouch = this.db.prepare('UPDATE access_keys SET last_used_at = ? WHERE id = ?');
     this.statements.keyConsume = this.db.prepare('UPDATE access_keys SET consumed_tokens = consumed_tokens + ? WHERE id = ?');
     this.statements.keyTrackCache = this.db.prepare('UPDATE access_keys SET cached_tokens = cached_tokens + ?, uncached_input_tokens = uncached_input_tokens + ?, cache_reported_input_tokens = cache_reported_input_tokens + ? WHERE id = ?');
@@ -211,6 +215,7 @@ export class SqliteStore {
           key.id, key.name, key.prefix, key.tokenHash,
           key.createdAt, key.pausedAt || null, key.pausedMessage || null, key.revokedAt || null, key.lastUsedAt || null,
           key.allowExternalProviders ? 1 : 0,
+          key.localModelAllowed === false ? 0 : 1,
           Array.isArray(key.externalProviderIds) ? JSON.stringify(key.externalProviderIds) : null
         );
       }
@@ -300,6 +305,7 @@ export class SqliteStore {
     return this.statements.keysList.all().map((key) => ({
       ...key,
       allowExternalProviders: Boolean(key.allowExternalProviders),
+      localModelAllowed: key.localModelAllowed !== 0,
       externalProviderIds: parseExternalProviderIds(key.externalProviderIds)
     }));
   }
@@ -311,13 +317,18 @@ export class SqliteStore {
     return key ? {
       ...key,
       allowExternalProviders: Boolean(key.allowExternalProviders),
+      localModelAllowed: key.localModelAllowed !== 0,
       externalProviderIds: parseExternalProviderIds(key.externalProviderIds)
     } : null;
   }
 
-  async createKey(name, { allowExternalProviders = false, externalProviderIds = null } = {}) {
+  async createKey(name, { allowExternalProviders = false, localModelAllowed = true, externalProviderIds = null } = {}) {
     const token = `lmg_${crypto.randomBytes(28).toString('base64url')}`;
     const allow = Boolean(allowExternalProviders);
+    // Sin acceso local y sin externos la clave no tendria ningun modelo
+    // disponible: se rechaza en lugar de activar un origen por sorpresa.
+    const local = localModelAllowed !== false;
+    if (!local && !allow) throw new Error('La clave debe poder usar al menos el proveedor local o los externos.');
     const filter = allow && Array.isArray(externalProviderIds) ? externalProviderIds : null;
     const key = {
       id: crypto.randomUUID(),
@@ -329,9 +340,10 @@ export class SqliteStore {
       revokedAt: null,
       lastUsedAt: null,
       allowExternalProviders: allow,
+      localModelAllowed: local,
       externalProviderIds: filter
     };
-    this.statements.keyInsert.run(key.id, key.name, key.prefix, hashToken(token), key.createdAt, null, null, null, null, allow ? 1 : 0, filter ? JSON.stringify(filter) : null);
+    this.statements.keyInsert.run(key.id, key.name, key.prefix, hashToken(token), key.createdAt, null, null, null, null, allow ? 1 : 0, local ? 1 : 0, filter ? JSON.stringify(filter) : null);
     return { ...key, token };
   }
 
@@ -372,7 +384,7 @@ export class SqliteStore {
     return this.listKeys().find((key) => key.id === id) || null;
   }
 
-  async setKeyExternalAccess(id, allowExternalProviders = undefined, providerIds = undefined) {
+  async setKeyExternalAccess(id, allowExternalProviders = undefined, providerIds = undefined, localModelAllowed = undefined) {
     const current = this.listKeys().find((key) => key.id === id);
     if (!current || current.revokedAt) return null;
     const allow = allowExternalProviders === undefined ? current.allowExternalProviders : Boolean(allowExternalProviders);
@@ -381,7 +393,11 @@ export class SqliteStore {
       const effective = providerIds === undefined ? current.externalProviderIds : providerIds;
       storedFilter = effective ? JSON.stringify(effective) : null;
     }
-    const result = this.statements.keyExternalAccess.run(allow ? 1 : 0, storedFilter, id);
+    const local = localModelAllowed === undefined ? current.localModelAllowed : localModelAllowed !== false;
+    // Una clave sin acceso local y sin externos no tendria ningun modelo
+    // disponible: se rechaza en lugar de activar un origen por sorpresa.
+    if (!local && !allow) return null;
+    const result = this.statements.keyExternalAccess.run(allow ? 1 : 0, local ? 1 : 0, storedFilter, id);
     if (Number(result.changes) === 0) return null;
     return this.listKeys().find((key) => key.id === id) || null;
   }

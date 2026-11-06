@@ -57,7 +57,9 @@ También se admite `x-api-key`. Todas las rutas `/v1/*` se reenvían a Proveedor
 
 En **Configuración → Proveedores externos** se pueden registrar hasta 20 servidores OpenAI-compatible con un nombre, un prefijo, su URL base y un token opcional. benzIA consulta dinámicamente el endpoint `/v1/models` de cada origen cuando un cliente solicita la lista de modelos. Los modelos locales conservan su identificador original y los externos se publican como `proveedor/modelo`; al usarlos, benzIA retira el prefijo y reenvía la petición y las credenciales al proveedor correspondiente.
 
-Cada clave de benzIA tiene un permiso independiente: **Solo proveedor local** o **Permitir proveedores externos**. Por seguridad, las claves existentes y las nuevas usan sólo el proveedor local de forma predeterminada. El permiso puede elegirse al crear la clave o cambiarse después desde **Claves API**. Los tokens de proveedores externos se almacenan únicamente en el servidor y nunca se devuelven al navegador.
+Cada clave de benzIA elige qué orígenes de modelos puede usar: **Solo proveedor local**, **Permitir externos** (local y externos) o **Solo externos**. Por seguridad, las claves existentes y las nuevas usan sólo el proveedor local de forma predeterminada. El permiso puede elegirse al crear la clave o cambiarse después desde **Claves API**. Los tokens de proveedores externos se almacenan únicamente en el servidor y nunca se devuelven al navegador.
+
+Con **Solo externos** el modelo local queda oculto e inaccesible para ese token: no aparece en `/v1/models` y cualquier inferencia contra él se rechaza con HTTP `403` y código `local_provider_forbidden`, incluso escribiendo el identificador local a mano. La combinación contraria (sin local y sin externos) no se permite, porque dejaría la clave sin ningún modelo; la API responde `400`. El botón **Proveedores** sigue filtrando qué proveedores externos concretos ve la clave.
 
 ### Capacidades de modelo en `/v1/models`
 

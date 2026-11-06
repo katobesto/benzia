@@ -1,4 +1,4 @@
-import { parseApiResponse, providerFilterOptions } from './api-client.js?v=13';
+import { keyProviderAccessOptions, keyProviderAccessPayload, parseApiResponse, providerFilterOptions } from './api-client.js?v=14';
 
 const routes = {
   '/': 'dashboard',
@@ -388,7 +388,7 @@ function renderKeys() {
     const accessAction = key.pausedAt
       ? `<button class="row-action resume-key" data-id="${escapeHtml(key.id)}" type="button">Reanudar</button><button class="row-action edit-pause-message" data-id="${escapeHtml(key.id)}" type="button">Editar aviso</button>`
       : `<button class="row-action pause-key" data-id="${escapeHtml(key.id)}" type="button">Pausar</button>`;
-    const providerAccess = `<select class="key-provider-access" data-id="${escapeHtml(key.id)}" aria-label="Acceso a proveedores de ${escapeHtml(key.name)}" ${key.revokedAt ? 'disabled' : ''}><option value="local" ${!key.allowExternalProviders ? 'selected' : ''}>Solo proveedor local</option><option value="external" ${key.allowExternalProviders ? 'selected' : ''}>Permitir externos</option></select>`;
+    const providerAccess = `<select class="key-provider-access" data-id="${escapeHtml(key.id)}" aria-label="Acceso a proveedores de ${escapeHtml(key.name)}"${key.revokedAt ? ' disabled' : ''}>${keyProviderAccessOptions(key)}</select>`;
     const providerFilterButton = key.allowExternalProviders
       ? `<button class="row-action provider-filter" data-id="${escapeHtml(key.id)}" title="Elegir qué proveedores externos ve esta clave" type="button">Proveedores</button>`
       : '';
@@ -408,8 +408,8 @@ function renderKeys() {
   table.querySelectorAll('.key-provider-access').forEach((select) => select.addEventListener('change', async () => {
     select.disabled = true;
     try {
-      await api(`/admin/api/keys/${encodeURIComponent(select.dataset.id)}/providers`, { method: 'PATCH', body: JSON.stringify({ allowExternalProviders: select.value === 'external' }) });
-      toast(select.value === 'external' ? 'Proveedores externos habilitados' : 'Acceso limitado al proveedor local');
+      await api(`/admin/api/keys/${encodeURIComponent(select.dataset.id)}/providers`, { method: 'PATCH', body: JSON.stringify(keyProviderAccessPayload(select.value)) });
+      toast({ 'local-only': 'Acceso limitado al proveedor local', 'both': 'Proveedores externos habilitados', 'external-only': 'El modelo local queda oculto para esta clave' }[select.value] || 'Acceso actualizado');
       await loadAll();
     } catch (error) { toast(error.message); select.disabled = false; }
   }));
@@ -1028,7 +1028,7 @@ $$('[data-open-key-dialog]').forEach((button) => button.addEventListener('click'
 $('#key-form').addEventListener('submit', async (event) => {
   if (event.submitter?.value === 'cancel') return;
   event.preventDefault();
-  try { const payload = await api('/admin/api/keys', { method: 'POST', body: JSON.stringify({ name: $('#key-name').value, allowExternalProviders: $('#key-provider-access').value === 'external' }) }); $('#key-dialog').close(); $('#created-token').textContent = payload.key.token; $('#token-dialog').showModal(); await loadAll(); }
+  try { const payload = await api('/admin/api/keys', { method: 'POST', body: JSON.stringify({ name: $('#key-name').value, ...keyProviderAccessPayload($('#key-provider-access').value) }) }); $('#key-dialog').close(); $('#created-token').textContent = payload.key.token; $('#token-dialog').showModal(); await loadAll(); }
   catch (error) { $('#key-message').textContent = error.message; }
 });
 $('#pause-form').addEventListener('submit', async (event) => {

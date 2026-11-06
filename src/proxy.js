@@ -305,6 +305,11 @@ export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, 
       else if (path !== '/v1/embeddings') body.max_tokens = Math.min(Number(body.max_tokens) || outputBudget, outputBudget);
     }
     const settings = effectiveSettings();
+    // El acceso al proveedor local es una decision por token ("Solo proveedor
+    // local" / "Permitir externos" / "Solo externos"). Con localModelAllowed en
+    // falso el modelo local no se lista ni se puede invocar, ni siquiera
+    // escribiendo su ID a mano: se comprueba tambien en la inferencia.
+    const localAllowed = accessKey.localModelAllowed !== false;
     if (req.method === 'GET' && path === '/v1/models') {
       const localProvider = { baseUrl: settings.upstreamBaseUrl, apiKey: settings.upstreamApiKey };
       const providers = accessKey.allowExternalProviders
@@ -314,12 +319,14 @@ export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, 
         ? normalizeCodexModels(settings.codexOpenAI.models || [], settings.codexOpenAI.selectedModel)
         : [];
       const results = await Promise.allSettled([
-        fetchLocalProviderModels(localProvider, { timeoutMs: Math.min(config.requestTimeoutMs, 8000), limitsTimeoutMs: Math.min(config.requestTimeoutMs, 750) }),
+        localAllowed
+          ? fetchLocalProviderModels(localProvider, { timeoutMs: Math.min(config.requestTimeoutMs, 8000), limitsTimeoutMs: Math.min(config.requestTimeoutMs, 750) })
+          : Promise.resolve([]),
         ...providers.map((provider) => fetchProviderModels(provider, { timeoutMs: Math.min(config.requestTimeoutMs, EXTERNAL_MODELS_TIMEOUT_MS) }))
       ]);
       const hasAnyModelsResponse = results.some((result) => result.status === 'fulfilled');
       if (!hasAnyModelsResponse && !codexModels.length) return res.status(502).json(safeError(502, `No se pudo consultar el proveedor local: ${results[0].reason?.message || 'sin conexión'}.`, 'upstream_unavailable'));
-      const localModels = results[0].status === 'fulfilled' ? results[0].value : [];
+      const localModels = localAllowed && results[0].status === 'fulfilled' ? results[0].value : [];
       const externalModels = providers.flatMap((provider, index) => {
         const result = results[index + 1];
         if (result.status !== 'fulfilled') return [];
@@ -352,6 +359,12 @@ export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, 
     }
     if (externalRoute && Array.isArray(externalRoute.provider.visibleModels) && !externalRoute.provider.visibleModels.includes(externalRoute.upstreamModel)) {
       return res.status(404).json(safeError(404, 'El modelo solicitado no está publicado por este proveedor.', 'model_not_found'));
+    }
+    // "Solo externos": tampoco se puede invocar el modelo local escribiendo su
+    // ID a mano. La ruta local es la que no coincide ni con Codex ni con el
+    // prefijo de un proveedor externo.
+    if (!localAllowed && isInference && !codexRoute && !externalRoute) {
+      return res.status(403).json(safeError(403, 'Este token no tiene acceso al proveedor local; sólo puede usar proveedores externos.', 'local_provider_forbidden'));
     }
     const selectedProvider = codexRoute ? { id: 'openai', name: 'OpenAI Codex', baseUrl: 'codex://app-server', apiKey: '' } : externalRoute?.provider || {
       id: 'local', name: 'Proveedor IA Local', baseUrl: settings.upstreamBaseUrl, apiKey: settings.upstreamApiKey
