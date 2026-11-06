@@ -21,6 +21,11 @@ export function loadConfig() {
     trustCloudflareProxy: process.env.TRUST_CLOUDFLARE_PROXY === 'true',
     gatewayPort: numberFromEnv('GATEWAY_PORT', 3401, { min: 1, max: 65535 }),
     publicGatewayUrl: normalizeBaseUrl(process.env.PUBLIC_GATEWAY_URL || `http://localhost:${process.env.GATEWAY_PORT || 3401}`),
+    // La directiva CSP upgrade-insecure-requests sólo tiene sentido si el gateway
+    // escucha HTTPS; por defecto se deduce de PUBLIC_GATEWAY_URL.
+    cspUpgradeInsecureRequests: process.env.CSP_UPGRADE_INSECURE_REQUESTS === undefined
+      ? normalizeBaseUrl(process.env.PUBLIC_GATEWAY_URL || `http://localhost:${process.env.GATEWAY_PORT || 3401}`).startsWith('https://')
+      : process.env.CSP_UPGRADE_INSECURE_REQUESTS === 'true',
     upstreamBaseUrl: normalizeBaseUrl(process.env.LM_STUDIO_BASE_URL || 'http://127.0.0.1:1234'),
     upstreamApiKey: process.env.LM_STUDIO_API_KEY || '',
     serverProxyTarget: 'http://127.0.0.1:4000',

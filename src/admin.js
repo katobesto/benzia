@@ -4,7 +4,6 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 import express from 'express';
-import helmet from 'helmet';
 
 import { adminAuth } from './admin-auth.js';
 import { DEFAULT_BRAVE_SEARCH_ENDPOINT, normalizeBraveEndpoint } from './brave-search.js';
@@ -14,6 +13,7 @@ import { buildOverviewPayload } from './overview.js';
 import { fetchProviderModels, normalizeProviderBaseUrl, normalizeVisibleModels, publicExternalProviders, sanitizeExternalProviders, PROVIDER_ID_PATTERN } from './providers.js';
 import { jsonBodyErrorHandler } from './http-errors.js';
 import { normalizeCodexModels } from './codex-provider.js';
+import { securityHeaders } from './security-headers.js';
 
 const publicDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../public');
 const DEFAULT_BRANDING = Object.freeze({ name: 'benzIA', logoDataUrl: null });
@@ -112,7 +112,7 @@ export function extractOpenAiModels(payload) {
 export function createAdminApp({ config, store, liveActivity }) {
   const app = express();
   app.disable('x-powered-by');
-  app.use(helmet({ contentSecurityPolicy: { directives: { 'script-src': ["'self'"], 'style-src': ["'self'"], 'img-src': ["'self'", 'data:'] } } }));
+  app.use(securityHeaders(config, { 'script-src': ["'self'"], 'style-src': ["'self'"], 'img-src': ["'self'", 'data:'] }));
   app.use(express.json({ limit: '1mb' }));
   app.use(express.static(publicDir, { extensions: ['html'], index: false, setHeaders: (res, filePath) => {
     if (filePath.endsWith('.js')) res.setHeader('Cache-Control', 'no-store');

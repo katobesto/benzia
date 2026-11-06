@@ -3,11 +3,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import express from 'express';
-import helmet from 'helmet';
 
 import { accessAuth, PAUSED_TOKEN_MESSAGE } from './access-auth.js';
 import { jsonBodyErrorHandler } from './http-errors.js';
 import { buildOverviewPayload } from './overview.js';
+import { securityHeaders } from './security-headers.js';
 
 const publicDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../public');
 
@@ -18,14 +18,10 @@ const publicDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 export function createStatusApp({ config, store, liveActivity }) {
   const app = express();
   app.disable('x-powered-by');
-  app.use(helmet({
-    contentSecurityPolicy: {
-      directives: {
-        'script-src': ["'self'"],
-        'style-src': ["'self'"],
-        'img-src': ["'self'", 'data:']
-      }
-    }
+  app.use(securityHeaders(config, {
+    'script-src': ["'self'"],
+    'style-src': ["'self'"],
+    'img-src': ["'self'", 'data:']
   }));
 
   const auth = (req, res, next) => {

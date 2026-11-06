@@ -3,7 +3,6 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import express from 'express';
-import helmet from 'helmet';
 import multer from 'multer';
 
 import { extractAccessToken } from './access-auth.js';
@@ -12,6 +11,7 @@ import { DOCUMENT_MAX_BYTES, documentKind, extractDocument } from './document-ex
 import { jsonBodyErrorHandler } from './http-errors.js';
 import { runResearch } from './research.js';
 import { RateLimiter } from './rate-limit.js';
+import { securityHeaders } from './security-headers.js';
 import { resolveSearchProvider, runWebSearch } from './web-search.js';
 import { fetchWebPage } from './web-fetch.js';
 
@@ -46,15 +46,11 @@ const PREVIEW_FRAME_CSP = [
 export function createChatApp({ config, store, rateLimiter: configuredRateLimiter }) {
   const app = express();
   app.disable('x-powered-by');
-  app.use(helmet({
-    contentSecurityPolicy: {
-      directives: {
-        'script-src': ["'self'"],
-        'style-src': ["'self'"],
-        'img-src': ["'self'", 'data:'],
-        'connect-src': ["'self'", 'https:', 'http:']
-      }
-    }
+  app.use(securityHeaders(config, {
+    'script-src': ["'self'"],
+    'style-src': ["'self'"],
+    'img-src': ["'self'", 'data:'],
+    'connect-src': ["'self'", 'https:', 'http:']
   }));
 
   const rateLimiter = configuredRateLimiter || new RateLimiter({ limit: config.rateLimitAuthPerMinute || 20 });
