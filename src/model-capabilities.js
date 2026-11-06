@@ -5,6 +5,10 @@ export const CAPABILITIES_FILENAME = 'model-capabilities.json';
 export const MAX_CAPABILITIES = 200;
 const MODALITIES = new Set(['text', 'image']);
 const QWEN38_REASONING_EFFORTS = ['none', 'low', 'medium', 'xhigh'];
+// Qwen 3.5 acepta el esfuerzo completo salvo "max": comprobado contra el
+// upstream, que responde 400 con "Supported values: none, minimal, low,
+// medium, high, xhigh". "none" apaga el pensamiento (0 tokens de razonamiento).
+const QWEN35_REASONING_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'];
 const REASONING_EFFORTS = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
 
 function qwen38Family(modelId) {
@@ -15,6 +19,15 @@ function qwen38Family(modelId) {
   return '';
 }
 
+// Qwen 3.5 (qwen3.5, qwen-3.5, qwen3_5, qwen35). El segundo patrón descarta
+// tamaños de modelo ambiguos como "qwen3-5b", que no indican la versión 3.5.
+function qwen35Family(modelId) {
+  const id = String(modelId || '').toLowerCase();
+  if (!/qwen[\s._-]*3[\s._-]*5\b/.test(id)) return '';
+  if (/qwen3[\s._-]*5b\b/.test(id)) return '';
+  return 'qwen35';
+}
+
 export function reasoningEffortsForModel(modelId, capabilities = {}) {
   const normalizedId = String(modelId || '');
   const matchingId = Object.keys(capabilities).find((id) => normalizedId === id || normalizedId.endsWith(`/${id}`));
@@ -22,6 +35,7 @@ export function reasoningEffortsForModel(modelId, capabilities = {}) {
   if (declared) return [...declared];
   const family = qwen38Family(modelId);
   if (family === 'qwen38') return [...QWEN38_REASONING_EFFORTS];
+  if (qwen35Family(modelId)) return [...QWEN35_REASONING_EFFORTS];
   return [];
 }
 

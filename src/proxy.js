@@ -279,12 +279,19 @@ export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, 
     if (accessKey.pausedAt && !path.startsWith('/v1/models')) {
       return res.status(403).json(safeError(403, accessKey.pausedMessage || PAUSED_TOKEN_MESSAGE, 'access_disabled'));
     }
-    if (isInference && body?.reasoning_effort !== undefined) {
+    // El esfuerzo de razonamiento llega por dos vias: `reasoning_effort` en
+    // Chat Completions y `reasoning: { effort }` en Responses API. Se valida
+    // lo que el modelo admite para no rebotar valores que el upstream ignora
+    // o rechaza con mensajes poco claros.
+    const requestedEffort = isInference
+      ? (body?.reasoning?.effort !== undefined ? body.reasoning.effort : body?.reasoning_effort)
+      : undefined;
+    if (requestedEffort !== undefined) {
       const inferenceCapabilities = await loadModelCapabilities(config.dataDir);
       const reasoningEfforts = reasoningEffortsForModel(body.model, inferenceCapabilities);
-      if (reasoningEfforts.length && !reasoningEfforts.includes(body.reasoning_effort)) {
-        const error = safeError(400, `reasoning_effort no válido para este modelo. Valores admitidos: ${reasoningEfforts.join(', ')}.`, 'invalid_parameter');
-        error.error.param = 'reasoning_effort';
+      if (reasoningEfforts.length && !reasoningEfforts.includes(requestedEffort)) {
+        const error = safeError(400, `El esfuerzo de razonamiento "${requestedEffort}" no es válido para este modelo. Valores admitidos: ${reasoningEfforts.join(', ')}.`, 'invalid_parameter');
+        error.error.param = body?.reasoning?.effort !== undefined ? 'reasoning.effort' : 'reasoning_effort';
         return res.status(400).json(error);
       }
     }
@@ -352,6 +359,24 @@ export function createGatewayApp({ config, store, adminApp, chatApp, statusApp, 
     const upstreamUrl = codexRoute ? '' : `${selectedProvider.baseUrl}${req.originalUrl}`;
     let upstreamBody = body ? { ...body } : undefined;
     if (externalRoute && upstreamBody) upstreamBody.model = externalRoute.upstreamModel;
+    // El esfuerzo de razonamiento se complementa en ambos formatos, nunca se
+    // sustituye: cada proveedor lee el campo que soporta y tolera el otro. Qwen
+    // 3.8 se comporta como siempre porque `reasoning_effort` sigue viajando;
+    // Qwen 3.5 en Responses API necesita ademas `reasoning.effort` para dejar
+    // de pensar (alli LM Studio ignora reasoning_effort en silencio). Solo se
+    // aplica al proveedor local: los externos reciben el cuerpo del cliente sin
+    // tocar.
+    if (upstreamBody && !externalRoute && !codexRoute) {
+      if (path === '/v1/responses' && upstreamBody.reasoning_effort !== undefined && upstreamBody.reasoning?.effort === undefined) {
+        upstreamBody.reasoning = { ...(upstreamBody.reasoning && typeof upstreamBody.reasoning === 'object' ? upstreamBody.reasoning : {}), effort: upstreamBody.reasoning_effort };
+      } else if (path === '/v1/chat/completions' && upstreamBody.reasoning?.effort !== undefined && upstreamBody.reasoning_effort === undefined) {
+        upstreamBody.reasoning_effort = upstreamBody.reasoning.effort;
+        // Un objeto `reasoning` suelto no es un campo de Chat Completions y un
+        // upstream estricto puede rechazarlo; solo se retira si no aportaba nada
+        // mas que el esfuerzo ya copiado.
+        if (Object.keys(upstreamBody.reasoning).length === 1) delete upstreamBody.reasoning;
+      }
+    }
     const usageCompatibilityKey = JSON.stringify([selectedProvider.baseUrl, selectedProvider.apiKey || '', upstreamBody?.model]);
     const incompatibleUntil = unsupportedStreamUsage.get(usageCompatibilityKey) || 0;
     if (incompatibleUntil && incompatibleUntil <= Date.now()) unsupportedStreamUsage.delete(usageCompatibilityKey);
