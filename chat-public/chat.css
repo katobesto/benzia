@@ -279,6 +279,11 @@ kbd { padding: 1px 4px; border: 1px solid var(--line); border-radius: 4px; color
 .reasoning-effort-control select option { background: #242424; color: #f2f2f2; font-weight: 600; }
 .reasoning-effort-control select option:checked { background: #355f54; color: #fff; }
 .reasoning-effort-control select:disabled { cursor: wait; opacity: .5; }
+.reasoning-effort-control .effort-label { display: inline-flex; align-items: center; gap: 6px; }
+.reasoning-effort-control .thinking-toggle { display: inline-flex; align-items: center; gap: 5px; padding-left: 7px; border-left: 1px solid var(--line); color: var(--dim); cursor: pointer; user-select: none; }
+.reasoning-effort-control .thinking-toggle input { width: 13px; height: 13px; margin: 0; accent-color: var(--accent); cursor: pointer; }
+.reasoning-effort-control .thinking-toggle input:disabled { cursor: wait; opacity: .5; }
+.reasoning-effort-control .thinking-toggle:has(input:not(:checked)) { color: var(--muted); text-decoration: line-through; }
 .regenerate-message { margin-right: 3px; padding: 5px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--dim); font-size: 11px; }
 .regenerate-message:hover { background: rgba(89,220,181,.12); color: var(--accent); }
 .send-button, .stop-button { width: 34px; height: 34px; flex: 0 0 auto; display: grid; place-items: center; border: 0; border-radius: 50%; background: var(--text); color: #222; transition: background .15s ease,transform .15s ease; }

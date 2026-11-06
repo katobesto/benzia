@@ -27,7 +27,7 @@ test('sirve la interfaz de chat sin exponer su configuración', async (t) => {
   assert.equal(page.headers.get('cache-control'), 'no-store');
   const html = await page.text();
   assert.match(html, /benzIA Chat/);
-  assert.match(html, /<script src="\/chat\/chat\.js\?v=21"/);
+  assert.match(html, /<script src="\/chat\/chat\.js\?v=24"/);
   assert.match(html, /Powered by <strong>benzIA<\/strong>/);
   assert.match(html, /<a href="\/chat" class="brand" id="chat-brand-link" aria-label="benzIA Chat"><img class="brand-logo" id="chat-brand-logo"/);
   assert.match(html, /id="chat-brand-logo"[^>]*><span class="brand-context">CHAT<\/span><\/a>/);

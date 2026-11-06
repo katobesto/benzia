@@ -6,7 +6,7 @@
   <meta name="color-scheme" content="dark">
   <meta id="chat-description" name="description" content="Chat privado para probar los modelos servidos por benzIA.">
   <title>benzIA Chat</title>
-  <link rel="stylesheet" href="/chat/chat.css?v=22">
+  <link rel="stylesheet" href="/chat/chat.css?v=23">
   <link rel="stylesheet" href="/chat/vendor/github-dark.min.css?v=13">
 </head>
 <body>
@@ -93,15 +93,20 @@
               <span id="attachment-help"><kbd>Enter</kbd> enviar · arrastra, pega o adjunta archivos</span>
             </div>
             <div class="composer-actions">
-              <label class="reasoning-effort-control hidden" id="reasoning-effort-control" for="reasoning-effort">
-                <span>Esfuerzo</span>
-                <select id="reasoning-effort" aria-label="Esfuerzo de razonamiento">
-                  <option value="none">none</option>
-                  <option value="low">low</option>
-                  <option value="medium" selected>medium</option>
-                  <option value="xhigh">xhigh</option>
-                </select>
-              </label>
+              <span class="reasoning-effort-control hidden" id="reasoning-effort-control">
+                <label class="effort-label" for="reasoning-effort"><span>Esfuerzo</span>
+                  <select id="reasoning-effort" aria-label="Esfuerzo de razonamiento">
+                    <option value="none">none</option>
+                    <option value="low">low</option>
+                    <option value="medium" selected>medium</option>
+                    <option value="xhigh">xhigh</option>
+                  </select>
+                </label>
+                <label class="thinking-toggle" id="reasoning-thinking-toggle" for="reasoning-thinking" title="Activa o desactiva el pensamiento del modelo; al desactivarlo se envía reasoning_effort: none">
+                  <input type="checkbox" id="reasoning-thinking" checked>
+                  <span>Pensamiento</span>
+                </label>
+              </span>
               <button class="send-button" id="send-button" type="submit" aria-label="Enviar mensaje"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 4 17 8-17 8 3-7 9-1-9-1-3-7Z"/></svg></button>
               <button class="stop-button hidden" id="stop-button" type="button" aria-label="Detener respuesta">■</button>
             </div>
@@ -152,6 +157,6 @@
   <script src="/chat/vendor/marked.umd.js?v=20" defer></script>
   <script src="/chat/vendor/highlight.min.js?v=20" defer></script>
   <script src="/chat/model-health.js?v=20" defer></script>
-  <script src="/chat/chat.js?v=21" defer></script>
+  <script src="/chat/chat.js?v=24" defer></script>
 </body>
 </html>

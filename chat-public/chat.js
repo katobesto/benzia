@@ -3,6 +3,7 @@ const STORAGE_KEY = 'benzIA_chat_conversations_v1';
 const ACTIVE_KEY = 'benzIA_chat_active_v1';
 const MODEL_KEY = 'benzIA_chat_model_v1';
 const QWEN_REASONING_EFFORT_KEY = 'benzIA_chat_qwen_reasoning_effort_v1';
+const THINKING_DISABLED_KEY = 'benzIA_chat_qwen_thinking_disabled_v1';
 const TOKEN_KEY = 'benzIA_chat_access_token';
 const MAX_CONVERSATIONS = 50;
 const MAX_MESSAGES = 200;
@@ -29,6 +30,45 @@ let previewAttempt = 0;
 let brandingName = 'benzIA';
 
 window.marked.setOptions({ gfm: true, breaks: true });
+
+// crypto.randomUUID sólo existe en contextos seguros (https o localhost). Al
+// servir el chat por http:// en una IP de red, el navegador no lo expone, así
+// que se genera un UUID v4 con crypto.getRandomValues, que sí está disponible.
+function newId() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  const bytes = new Uint8Array(16);
+  if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+    crypto.getRandomValues(bytes);
+  } else {
+    for (let i = 0; i < bytes.length; i += 1) bytes[i] = Math.floor(Math.random() * 256);
+  }
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+// navigator.clipboard tampoco está expuesto fuera de contextos seguros (http://
+// en una IP). Se usa el portapapeles legado como respaldo para no romper el
+// botón Copiar en despliegues locales de prueba.
+async function copyToClipboard(text) {
+  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return true;
+  }
+  const area = document.createElement('textarea');
+  area.value = text;
+  area.setAttribute('readonly', '');
+  area.style.position = 'fixed';
+  area.style.opacity = '0';
+  document.body.append(area);
+  area.select();
+  let copied = false;
+  try { copied = document.execCommand('copy'); } catch { copied = false; }
+  area.remove();
+  if (!copied) throw new Error('El navegador no permite copiar en este contexto.');
+  return true;
+}
 
 // Perfiles de instrucciones de sistema. El texto de cada preset viaja como
 // mensaje system en cada petición; el planificador de la investigación web
@@ -354,34 +394,61 @@ function supportsReasoningEffort(model) {
 
 function reasoningEffortsForModel(model) {
   const advertised = state.modelMetadata?.[model]?.benzIA_supported_parameters?.reasoning_effort?.enum;
-  const chatEfforts = new Set(['none', 'low', 'medium', 'xhigh']);
-  if (Array.isArray(advertised) && advertised.length) return advertised.map((effort) => String(effort).toLowerCase()).filter((effort) => chatEfforts.has(effort));
-  const normalized = String(model || '').replace(/[._\s-]/g, '');
-  if (/qwen38/i.test(normalized)) return ['none', 'low', 'medium', 'xhigh'];
+  // Lo declarado por el administrador en capacidades manda tal cual: es lo que
+  // el proveedor anuncia y no se filtra, para no quitar opciones ya validas
+  // (por ejemplo "high" o "max" en Qwen 3.8).
+  if (Array.isArray(advertised) && advertised.length) {
+    return [...new Set(advertised.map((effort) => String(effort).toLowerCase()).filter(Boolean))];
+  }
+  const normalized = String(model || '').toLowerCase();
+  if (/qwen38/i.test(normalized.replace(/[._\s-]/g, ''))) return ['none', 'low', 'medium', 'xhigh'];
+  // Qwen 3.5 acepta reasoning_effort; "none" desactiva el pensamiento.
+  if (/qwen[\s._-]*3[\s._-]*5\b/.test(normalized) && !/qwen3[\s._-]*5b\b/.test(normalized)) return ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'];
   return [];
+}
+
+// El esfuerzo "none" y el tick de pensamiento son dos vistas del mismo valor:
+// se guarda el esfuerzo preferido (distinto de none) y el estado de apagado.
+function reasoningEffortSelection(efforts) {
+  const preferred = localStorage.getItem(QWEN_REASONING_EFFORT_KEY) || '';
+  const chosen = efforts.includes(preferred) ? preferred : (efforts.includes('medium') ? 'medium' : (efforts.find((effort) => effort !== 'none') || efforts[0] || ''));
+  return localStorage.getItem(THINKING_DISABLED_KEY) === 'true' && efforts.includes('none') ? 'none' : chosen;
+}
+
+function thinkingDisabled() {
+  return localStorage.getItem(THINKING_DISABLED_KEY) === 'true';
 }
 
 function renderReasoningEffortControl() {
   const control = $('#reasoning-effort-control');
   const select = $('#reasoning-effort');
+  const thinking = $('#reasoning-thinking');
   const efforts = reasoningEffortsForModel(selectedModel());
   const visible = efforts.length > 0;
-  const previous = localStorage.getItem(QWEN_REASONING_EFFORT_KEY) || select.value || '';
   select.replaceChildren(...efforts.map((effort) => {
     const option = document.createElement('option');
     option.value = effort;
     option.textContent = effort;
     return option;
   }));
-  select.value = efforts.includes(previous) ? previous : (efforts.includes('medium') ? 'medium' : (efforts[0] || ''));
+  select.value = reasoningEffortSelection(efforts);
+  if (thinking) {
+    thinking.checked = !thinkingDisabled();
+    // Sin "none" en la lista del modelo no se puede apagar el pensamiento.
+    $('#reasoning-thinking-toggle')?.classList.toggle('hidden', !efforts.includes('none'));
+  }
+  const busy = state.generating || state.modelsLoading || state.modelHealthRunning;
   control.classList.toggle('hidden', !visible);
-  select.disabled = !visible || state.generating || state.modelsLoading || state.modelHealthRunning;
+  // Con el pensamiento apagado el esfuerzo no aplica: "none" manda sobre la
+  // seleccion, y dejar el desplegable editable solo confunde.
+  select.disabled = !visible || busy || select.value === 'none';
+  if (thinking) thinking.disabled = !visible || busy;
 }
 
 function createConversation() {
   const now = new Date().toISOString();
   const conversation = {
-    id: crypto.randomUUID(),
+    id: newId(),
     title: 'Nueva conversación',
     model: selectedModel(),
     instructions: instructionsDraft,
@@ -819,7 +886,13 @@ function applyMessageContent(container, rendered, sources, streaming) {
     copy.type = 'button';
     copy.textContent = 'Copiar código';
     copy.addEventListener('click', async () => {
-      await navigator.clipboard.writeText(content);
+      try {
+        await copyToClipboard(content);
+      } catch {
+        copy.textContent = 'No se pudo copiar';
+        setTimeout(() => { copy.textContent = 'Copiar código'; }, 1400);
+        return;
+      }
       copy.textContent = 'Copiado';
       setTimeout(() => { copy.textContent = 'Copiar código'; }, 1400);
     });
@@ -1372,7 +1445,12 @@ function messageElement(message, index) {
   copy.className = 'copy-message';
   copy.textContent = 'COPIAR';
   copy.addEventListener('click', async () => {
-    await navigator.clipboard.writeText(message.content);
+    try {
+      await copyToClipboard(message.content);
+    } catch {
+      toast('El navegador no permite copiar por HTTP; usa HTTPS o localhost.');
+      return;
+    }
     toast('Mensaje copiado');
   });
   meta.append(author, copy);
@@ -2243,7 +2321,19 @@ async function requestCompletion(conversation, webContext = '', useExistingPendi
       response = await fetch(`${state.endpoint}/responses`, {
         method: 'POST',
         headers: { authorization: `Bearer ${state.token}`, 'content-type': 'application/json' },
-        body: JSON.stringify({ model: conversation.model, input: context, max_output_tokens: outputTokenBudget(conversation.model), stream: true, store: false, ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}) }),
+        // El esfuerzo viaja en los dos formatos para no romper a nadie: Qwen
+        // 3.8 ya funcionaba con reasoning_effort, y Qwen 3.5 en Responses API
+        // solo obedece a reasoning.effort (comprobado contra el proveedor:
+        // reasoning_effort deja 389 tokens de razonamiento; con reasoning.effort
+        // "none" quedan en 0). El gateway local complementa lo que falte.
+        body: JSON.stringify({
+          model: conversation.model,
+          input: context,
+          max_output_tokens: outputTokenBudget(conversation.model),
+          stream: true,
+          store: false,
+          ...(reasoningEffort ? { reasoning_effort: reasoningEffort, reasoning: { effort: reasoningEffort } } : {})
+        }),
         signal: state.controller.signal
       });
       protocol = 'responses';
@@ -2607,6 +2697,13 @@ $('#model-select').addEventListener('change', (event) => {
 });
 $('#reasoning-effort').addEventListener('change', (event) => {
   localStorage.setItem(QWEN_REASONING_EFFORT_KEY, event.currentTarget.value);
+  if (event.currentTarget.value === 'none') localStorage.setItem(THINKING_DISABLED_KEY, 'true');
+  else if (thinkingDisabled()) localStorage.setItem(THINKING_DISABLED_KEY, 'false');
+  renderReasoningEffortControl();
+});
+$('#reasoning-thinking').addEventListener('change', (event) => {
+  localStorage.setItem(THINKING_DISABLED_KEY, event.currentTarget.checked ? 'false' : 'true');
+  renderReasoningEffortControl();
 });
 document.querySelectorAll('[data-prompt]').forEach((button) => button.addEventListener('click', () => {
   $('#message-input').value = button.dataset.prompt;
