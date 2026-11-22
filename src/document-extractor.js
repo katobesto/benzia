@@ -1,10 +1,13 @@
 import path from 'node:path';
 
+import { extractSpreadsheet } from './spreadsheet-extractor.js';
+
 export const DOCUMENT_MAX_BYTES = 6 * 1024 * 1024;
 export const DOCUMENT_MAX_CHARS = 120_000;
 
 const textExtensions = new Set(['.txt', '.md', '.markdown', '.csv', '.json', '.log', '.xml', '.yaml', '.yml']);
-const supportedExtensions = new Set([...textExtensions, '.pdf', '.docx']);
+const spreadsheetExtensions = new Set(['.xlsx', '.xlsm']);
+const supportedExtensions = new Set([...textExtensions, '.pdf', '.docx', ...spreadsheetExtensions]);
 
 export function documentKind(filename = '') {
   const extension = path.extname(filename).toLowerCase();
@@ -63,7 +66,16 @@ export async function extractDocument({ buffer, filename }) {
   if (!Buffer.isBuffer(buffer) || !buffer.length) throw new Error('El documento está vacío.');
   if (buffer.length > DOCUMENT_MAX_BYTES) throw new Error('El documento supera el límite de 6 MB.');
   const kind = documentKind(filename);
-  if (!kind) throw new Error('Formato no admitido. Usa PDF, DOCX, TXT, MD, CSV o JSON.');
+  if (!kind) throw new Error('Formato no admitido. Usa PDF, DOCX, XLSX, XLSM, TXT, MD, CSV o JSON.');
+
+  // Las hojas de cálculo se procesan con su propio lector (valores cacheados,
+  // fechas legibles y límites estrictos) y ya devuelven texto y truncado.
+  if (spreadsheetExtensions.has(kind)) {
+    const sheet = await extractSpreadsheet(buffer);
+    const cleaned = cleanExtractedText(sheet.text);
+    if (!cleaned.text) throw new Error('No se ha podido extraer contenido de la hoja de cálculo.');
+    return { ...cleaned, truncated: cleaned.truncated || sheet.truncated, kind: 'xlsx', sheets: sheet.sheets };
+  }
 
   let rawText = '';
   if (textExtensions.has(kind)) rawText = new TextDecoder('utf-8').decode(buffer);

@@ -148,7 +148,7 @@ export async function runResearch({ config, store, accessKey, model, messages, e
   }));
   signal?.throwIfAborted();
   const successes = settled.filter((result) => result.status === 'fulfilled').map((result) => result.value);
-  if (!successes.length) throw new Error('Brave no pudo devolver fuentes para esta investigación.');
+  if (!successes.length) throw new Error('El buscador no pudo devolver fuentes para esta investigación.');
 
   emit('research.status', { step: 'evidence', label: 'Seleccionando fuentes relevantes' });
   const seen = new Set();

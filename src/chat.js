@@ -7,7 +7,8 @@ import multer from 'multer';
 
 import { extractAccessToken } from './access-auth.js';
 import { validateSearchQuery } from './brave-search.js';
-import { DOCUMENT_MAX_BYTES, documentKind, extractDocument } from './document-extractor.js';
+import { DOCUMENT_MAX_BYTES, DOCUMENT_MAX_CHARS, documentKind, extractDocument } from './document-extractor.js';
+import { DOCUMENT_TOOL_MAX_RESULT_CHARS, DocumentToolStore, queryDocument } from './document-tools.js';
 import { jsonBodyErrorHandler } from './http-errors.js';
 import { runResearch } from './research.js';
 import { RateLimiter } from './rate-limit.js';
@@ -21,6 +22,10 @@ const vendorDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 const PREVIEW_TTL_MS = 10 * 60 * 1000;
 const PREVIEW_MAX_DOCS = 32;
 const PREVIEW_MAX_BYTES = 1_100_000;
+// Fragmento que se envía al navegador para mostrarlo en la tarjeta del adjunto.
+// El texto completo se queda en el servidor y el modelo lo consulta con
+// read_document, para no repetir 120.000 caracteres en cada petición.
+const ATTACHMENT_EXCERPT_CHARS = 4000;
 const PREVIEW_ID_PATTERN = /^[0-9a-f]{36}$/;
 const PREVIEW_WRAPPER_CSP = [
   "default-src 'none'",
@@ -119,6 +124,10 @@ export function createChatApp({ config, store, rateLimiter: configuredRateLimite
     fileFilter: (_req, file, done) => done(null, Boolean(documentKind(file.originalname)))
   });
   const previewDocs = new Map();
+  // Los documentos adjuntos se guardan aquí para que el modelo los consulte por
+  // secciones con `read_document` en lugar de recibir el texto completo en cada
+  // petición. Cada documento queda ligado a la clave que lo subió.
+  const documentTools = new DocumentToolStore();
   const prunePreviews = (now = Date.now()) => {
     for (const [id, doc] of previewDocs) if (doc.expiresAt <= now) previewDocs.delete(id);
     while (previewDocs.size > PREVIEW_MAX_DOCS) previewDocs.delete(previewDocs.keys().next().value);
@@ -231,19 +240,54 @@ export function createChatApp({ config, store, rateLimiter: configuredRateLimite
         return res.status(413).json({ error: 'El documento supera el límite de 6 MB.' });
       }
       if (uploadError) return res.status(400).json({ error: 'No se pudo recibir el documento.' });
-      if (!req.file) return res.status(400).json({ error: 'Adjunta un documento PDF, DOCX, TXT, MD, CSV o JSON.' });
+      if (!req.file) return res.status(400).json({ error: 'Adjunta un documento PDF, DOCX, XLSX, XLSM, TXT, MD, CSV o JSON.' });
       try {
         const extracted = await extractDocument({ buffer: req.file.buffer, filename: req.file.originalname });
+        // El texto completo se queda en el servidor: el navegador sólo recibe
+        // un extracto para mostrarlo y un ID para consultarlo con read_document.
+        const stored = documentTools.put({
+          name: path.basename(req.file.originalname),
+          kind: extracted.kind,
+          text: extracted.text,
+          sheets: extracted.sheets,
+          keyId: req.accessKey.id
+        });
         return res.json({
           name: path.basename(req.file.originalname).slice(0, 160),
           type: req.file.mimetype || 'application/octet-stream',
           size: req.file.size,
-          ...extracted
+          kind: extracted.kind,
+          doc: stored.id,
+          totalChars: extracted.text.length,
+          excerpt: extracted.text.slice(0, ATTACHMENT_EXCERPT_CHARS),
+          sheets: extracted.sheets || [],
+          truncated: Boolean(extracted.truncated)
         });
       } catch (error) {
         return res.status(422).json({ error: error.message || 'No se pudo leer el documento.' });
       }
     });
+  });
+
+  // Texto completo de un documento propio. Se usa sólo cuando el modelo no
+  // admite herramientas y hay que enviar el contenido inline; sigue acotado a
+  // DOCUMENT_MAX_CHARS y sólo lo obtiene la clave que lo subió.
+  app.post('/api/document/text', auth, keyRateLimit, (_req, res) => {
+    const doc = documentTools.find(_req.body?.doc, _req.accessKey.id);
+    if (!doc) return res.status(404).json({ error: 'El documento ya no está disponible. Vuelve a adjuntarlo.' });
+    return res.set('cache-control', 'no-store').json({ doc: doc.id, name: doc.name, kind: doc.kind, text: doc.text, truncated: doc.text.length >= DOCUMENT_MAX_CHARS });
+  });
+
+  // Consulta acotada de un documento adjunto. No ejecuta nada del archivo: sólo
+  // devuelve secciones de texto ya extraídas, y sólo a la clave que lo subió.
+  app.post('/api/document/query', auth, keyRateLimit, (req, res) => {
+    const doc = documentTools.find(req.body?.doc, req.accessKey.id);
+    if (!doc) return res.status(404).json({ error: 'El documento ya no está disponible. Vuelve a adjuntarlo.' });
+    const result = queryDocument({ doc, action: req.body?.action, sheet: req.body?.sheet, offset: req.body?.offset, limit: req.body?.limit, query: req.body?.query });
+    const clipped = result.length > DOCUMENT_TOOL_MAX_RESULT_CHARS
+      ? `${result.slice(0, DOCUMENT_TOOL_MAX_RESULT_CHARS)}\n…(respuesta recortada)`
+      : result;
+    return res.set('cache-control', 'no-store').json({ result: clipped, doc: { id: doc.id, name: doc.name, kind: doc.kind } });
   });
 
   app.post('/api/preview', auth, keyRateLimit, express.text({ limit: '1.2mb', type: 'text/*' }), (req, res) => {
@@ -282,6 +326,9 @@ export function createChatApp({ config, store, rateLimiter: configuredRateLimite
   app.get('/vendor/highlight.min.js', (_req, res) => res.sendFile(path.join(vendorDir, '@highlightjs/cdn-assets/highlight.min.js')));
   app.get('/vendor/github-dark.min.css', (_req, res) => res.sendFile(path.join(vendorDir, '@highlightjs/cdn-assets/styles/github-dark.min.css')));
   app.get('/benzia-logo.png', (_req, res) => res.sendFile(path.join(path.dirname(chatPublicDir), 'public/benzia-logo.png')));
+  // El navegador pide /favicon.ico por defecto; sin esta ruta devuelve 404 en
+  // cada carga. Se sirve el mismo logo, que además se actualiza con la marca.
+  app.get('/favicon.ico', (_req, res) => res.redirect('/chat/benzia-logo.png?v=1'));
   app.use(express.static(chatPublicDir, { index: false, fallthrough: true }));
   app.get('/', (_req, res) => {
     res.set('cache-control', 'no-store');

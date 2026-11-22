@@ -7,5 +7,6 @@
     "reasoning_effort": ["none", "low", "medium", "xhigh"]
   },
   "qwen2.5-vl-7b-instruct-q4_k_m.gguf": { "input": ["text", "image"], "output": ["text"] },
-  "cloud/mi-modelo-externo": { "input": ["text", "image"] }
+  "cloud/mi-modelo-externo": { "input": ["text", "image"] },
+  "iamac/qwen3.5-27b": { "protocols": ["chat_completions"] }
 }

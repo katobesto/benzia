@@ -10,6 +10,8 @@ const QWEN38_REASONING_EFFORTS = ['none', 'low', 'medium', 'xhigh'];
 // medium, high, xhigh". "none" apaga el pensamiento (0 tokens de razonamiento).
 const QWEN35_REASONING_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'];
 const REASONING_EFFORTS = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
+// Rutas OpenAI-compatible que un proveedor admite para un modelo concreto.
+const PROTOCOLS = new Set(['responses', 'chat_completions']);
 
 function qwen38Family(modelId) {
   const normalized = String(modelId || '').replace(/[._\s-]/g, '');
@@ -103,6 +105,18 @@ export function sanitizeModelCapabilities(value) {
       input: normalizeModalities('modalidades de entrada', id, raw.input, ['text']),
       output: normalizeModalities('modalidades de salida', id, raw.output, ['text'])
     };
+    // Rutas que el proveedor admite para este modelo. Sustituye en el chat a
+    // las reglas fijas sobre el nombre (p. ej. "iamac/"): el administrador
+    // declara lo que realmente soporta su gateway.
+    if (raw.protocols !== undefined && raw.protocols !== null) {
+      if (!Array.isArray(raw.protocols) || raw.protocols.length === 0) {
+        throw new Error(`Los protocolos de "${id}" deben ser una lista no vacía.`);
+      }
+      const protocols = [...new Set(raw.protocols)];
+      const invalid = protocols.find((protocol) => !PROTOCOLS.has(protocol));
+      if (invalid) throw new Error(`"${id}" declara el protocolo no válido "${String(invalid)}".`);
+      result[id].protocols = protocols;
+    }
     for (const field of ['context_length', 'max_completion_tokens']) {
       if (raw[field] === undefined || raw[field] === null) continue;
       if (!Number.isSafeInteger(raw[field]) || raw[field] < 1 || raw[field] > 10000000) {
@@ -167,6 +181,7 @@ export function annotateModel(model, capabilities = {}) {
     ...model,
     ...(declared ? { input_modalities: [...declared.input], output_modalities: [...declared.output] } : {}),
     ...(declared?.context_length ? { context_length: declared.context_length } : {}),
+    ...(declared?.protocols ? { benzIA_protocols: [...declared.protocols] } : {}),
     ...(declared?.max_completion_tokens ? { top_provider: { ...(model.top_provider && typeof model.top_provider === 'object' ? model.top_provider : {}), max_completion_tokens: declared.max_completion_tokens } } : {}),
     ...(efforts.length ? {
       supported_parameters: [...new Set([...(Array.isArray(model.supported_parameters) ? model.supported_parameters : []), 'reasoning_effort'])],

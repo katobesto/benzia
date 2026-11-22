@@ -73,7 +73,7 @@ Los endpoints `/v1/models` de Proveedor IA Local no anuncian qué modalidades de
 }
 ```
 
-Además de las modalidades, cada entrada puede declarar `context_length`, `max_completion_tokens` y `reasoning_effort` (lista de valores admitidos). benzIA publica el contexto con el campo común `context_length`, el máximo de salida en `top_provider.max_completion_tokens`, y los parámetros admitidos en `supported_parameters`; para describir los valores de una opción añade `benzIA_supported_parameters` con su enum. El `reasoning_effort` declarado se valida en las peticiones de inferencia y se anuncia a los clientes.
+Además de las modalidades, cada entrada puede declarar `context_length`, `max_completion_tokens`, `reasoning_effort` (lista de valores admitidos) y `protocols` (qué rutas OpenAI-compatible admite ese proveedor: `responses`, `chat_completions`). benzIA publica el contexto con el campo común `context_length`, el máximo de salida en `top_provider.max_completion_tokens`, y los parámetros admitidos en `supported_parameters`; para describir los valores de una opción añade `benzIA_supported_parameters` con su enum. El `reasoning_effort` declarado se valida en las peticiones de inferencia y se anuncia a los clientes. El chat usa `benzIA_protocols` para elegir la ruta correcta sin recurrir a reglas fijas sobre el nombre del modelo.
 
 ```json
 {
@@ -81,7 +81,8 @@ Además de las modalidades, cada entrada puede declarar `context_length`, `max_c
     "input": ["text"], "output": ["text"],
     "context_length": 262144, "max_completion_tokens": 65536,
     "reasoning_effort": ["none", "low", "medium", "xhigh"]
-  }
+  },
+  "iamac/qwen3.5-27b": { "protocols": ["chat_completions"] }
 }
 ```
 
@@ -105,9 +106,27 @@ El chat conserva los mensajes ya renderizados y agrupa las actualizaciones de st
 
 La cabecera distingue el contexto publicado, el máximo de salida anunciado y el presupuesto de petición del chat (32.768 tokens, o menos si el proveedor anuncia un máximo inferior). También reconoce el contexto de llama.cpp/NInfer en `meta.n_ctx` y el contexto de entrenamiento en `meta.n_ctx_train`. Si no se anuncia un máximo de salida independiente, muestra **salida no publicada**; no utiliza el tamaño del contexto como si fuera ese máximo. El detalle emergente muestra las cifras exactas y el contexto cargado cuando está disponible.
 
-El compositor permite adjuntar hasta cuatro archivos mediante el selector, arrastrando o pegando imágenes. JPEG, PNG, WebP y GIF se optimizan localmente y se envían a Proveedor IA Local como contenido visual compatible con OpenAI; para interpretarlas, el modelo seleccionado debe ser multimodal o de visión. PDF, DOCX, TXT, Markdown, CSV y JSON se procesan temporalmente en memoria, se convierten a texto y se incorporan al contexto con su nombre. Los documentos admiten hasta 6 MB y 120.000 caracteres extraídos; nunca se escriben en disco. Las imágenes y el texto extraído forman parte del historial local del navegador para conservar el contexto de la conversación.
+El compositor permite adjuntar hasta cuatro archivos mediante el selector, arrastrando o pegando imágenes. JPEG, PNG, WebP y GIF se optimizan localmente y se envían a Proveedor IA Local como contenido visual compatible con OpenAI; para interpretarlas, el modelo seleccionado debe ser multimodal o de visión. PDF, DOCX, **XLSX, XLSM**, TXT, Markdown, CSV y JSON se procesan temporalmente en memoria, se convierten a texto y se incorporan al contexto con su nombre. Los documentos admiten hasta 6 MB y 120.000 caracteres extraídos; nunca se escriben en disco.
 
-La extracción usa el endpoint protegido `POST /chat/api/attachments/extract`, por lo que también exige una clave de usuario activa. El navegador reduce cada imagen a un máximo de 1,3 MB antes de almacenarla y enviarla. Los documentos se delimitan y se marcan como contenido no confiable antes de enviarlos al modelo: sirven como referencia, pero sus instrucciones o enlaces no alteran las indicaciones del usuario. Si `localStorage` se llena, la interfaz avisa para que se eliminen chats antiguos.
+Las hojas de cálculo se leen con un lector propio (`src/spreadsheet-extractor.js`) en lugar de una librería de terceros: `exceljs` 4.4.0 tiene un CVE de *prototype pollution* y no se usa. El lector acepta sólo `.xlsx`/`.xlsm` (el `.xls` binario antiguo no), recorre el paquete OOXML con `jszip` y `@xmldom/xmldom`, y aplica límites duros: 1.200 entradas, 32 MB descomprimidos (frente a *zip bombs*), 24 hojas, 4.000 filas y 80 columnas por hoja y 2.000 caracteres por celda. Rechaza cualquier XML con `DOCTYPE`/`ENTITY` antes de parsearlo (ni XXE ni expansión de entidades) e ignora macros, VBA, dibujos y relaciones externas. **No evalúa fórmulas**: usa sólo el valor cacheado, y convierte los números con formato de fecha a texto legible (`45292` → `2024-01-01`, respetando el epoch 1904). El resultado se entrega como filas separadas por tabuladores con la referencia real de fila y columna.
+
+### Herramientas seguras de documento
+
+En lugar de dar al modelo acceso a una shell —peligroso para el servidor—, benzIA expone una herramienta de lectura acotada, `read_document`, que ejecuta el propio gateway. El flujo:
+
+1. `POST /chat/api/attachments/extract` extrae el texto y lo guarda en memoria del servidor (`DocumentToolStore`, caducidad de 6 h, máximo 64 documentos). El navegador recibe un **extracto de 4.000 caracteres** y un ID de documento de 32 hex; el texto completo no viaja al navegador ni se guarda en `localStorage`, lo que reduce mucho el historial local.
+2. En cada turno, si el modelo admite herramientas, el mensaje incluye sólo una referencia: `<documento id="…" nombre="…" tipo="xlsx" longitud="…">`. El modelo consulta lo que necesita con `read_document` y acciones `outline` (estructura), `rows` (rango de filas de una hoja), `text` (fragmento) y `search` (búsqueda de términos).
+3. `POST /chat/api/document/query` resuelve ese ID y devuelve la sección pedida, con topes de 120 filas, 20 coincidencias, 4.000 caracteres por sección y 14.000 por respuesta, y un máximo de 8 consultas por turno dentro del presupuesto global de investigación.
+
+El ID sólo lo resuelve **la clave que subió el documento**: un ID adivinado o filtrado no expone el archivo de otro usuario, y caduca. No hay ejecución de código del archivo en ningún punto. Si el modelo o el proveedor no aceptan `tools` (HTTP 400/404/405/501), el chat reintenta sin herramientas y recupera el texto completo con `POST /chat/api/document/text` para enviarlo inline: el adjunto nunca se pierde.
+
+La extracción usa el endpoint protegido `POST /chat/api/attachments/extract`, por lo que también exige una clave de usuario activa. El navegador reduce cada imagen a un máximo de 1,3 MB antes de almacenarla y enviarla. Los documentos se delimitan y se marcan como contenido no confiable antes de enviarlos al modelo: sirven como referencia, pero sus instrucciones o enlaces no alteran las indicaciones del usuario. El historial de la barra lateral admite búsqueda por título y por el texto de los mensajes. Si `localStorage` se acerca a su cuota, la interfaz avisa antes de que el guardado falle.
+
+### Control de contexto y presupuesto de salida
+
+Antes de enviar, el chat estima los tokens del contexto (con un peso mayor para CJK, donde cada carácter suele ser un token) y los compara con la ventana publicada por el modelo (`context_length`, `meta.n_ctx`…). Ajusta `max_tokens`/`max_output_tokens` al espacio realmente disponible, reservando 512 tokens para la plantilla del chat. Si el historial ya supera la ventana, no envía una petición que el proveedor rechazaría: muestra un error claro indicando las cifras y sugiriendo iniciar un chat nuevo o elegir un modelo con más contexto. Con el contexto justo, avisa de que la respuesta quedará limitada.
+
+Un turno completo (investigación, reintentos de protocolo y lectura de documentos) comparte un único `AbortController`, de modo que **Detener** cancela todas sus fases y no sólo la última petición.
 
 ### Contexto web con Brave Search
 

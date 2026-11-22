@@ -14,9 +14,11 @@ test('sirve la interfaz de chat sin exponer su configuración', async (t) => {
     getSettings: () => ({ publicGatewayUrl: 'https://gateway.example.test', webSearchProvider: 'brave' }),
     findKeyByToken: (token) => token === 'valid-user-token'
       ? { id: 'key-1', name: 'Equipo QA', pausedAt: null, revokedAt: null }
-      : token === 'paused-user-token'
-        ? { id: 'key-2', name: 'Equipo pausado', pausedAt: new Date().toISOString(), revokedAt: null }
-        : null
+      : token === 'other-user-token'
+        ? { id: 'key-9', name: 'Otro equipo', pausedAt: null, revokedAt: null }
+        : token === 'paused-user-token'
+          ? { id: 'key-2', name: 'Equipo pausado', pausedAt: new Date().toISOString(), revokedAt: null }
+          : null
   };
   const app = createChatApp({ config: { publicGatewayUrl: 'http://localhost:3401' }, store });
   const { server, baseUrl } = await listen(app);
@@ -27,7 +29,7 @@ test('sirve la interfaz de chat sin exponer su configuración', async (t) => {
   assert.equal(page.headers.get('cache-control'), 'no-store');
   const html = await page.text();
   assert.match(html, /benzIA Chat/);
-  assert.match(html, /<script src="\/chat\/chat\.js\?v=24"/);
+  assert.match(html, /<script src="\/chat\/chat\.js\?v=25"/);
   assert.match(html, /Powered by <strong>benzIA<\/strong>/);
   assert.match(html, /<a href="\/chat" class="brand" id="chat-brand-link" aria-label="benzIA Chat"><img class="brand-logo" id="chat-brand-logo"/);
   assert.match(html, /id="chat-brand-logo"[^>]*><span class="brand-context">CHAT<\/span><\/a>/);
@@ -125,12 +127,47 @@ test('sirve la interfaz de chat sin exponer su configuración', async (t) => {
     body: form
   });
   assert.equal(extracted.status, 200);
-  assert.deepEqual(await extracted.json(), {
-    name: 'prueba.txt',
-    type: 'text/plain',
-    size: 23,
-    text: 'Texto adjunto de prueba',
-    truncated: false,
-    kind: 'txt'
+  const extractedPayload = await extracted.json();
+  // El navegador recibe un extracto y un ID: el texto completo se queda en el
+  // servidor y el modelo lo consulta con la herramienta read_document.
+  assert.equal(extractedPayload.name, 'prueba.txt');
+  assert.equal(extractedPayload.type, 'text/plain');
+  assert.equal(extractedPayload.size, 23);
+  assert.equal(extractedPayload.kind, 'txt');
+  assert.equal(extractedPayload.excerpt, 'Texto adjunto de prueba');
+  assert.equal(extractedPayload.truncated, false);
+  assert.match(extractedPayload.doc, /^[0-9a-f]{32}$/);
+  assert.doesNotMatch(JSON.stringify(extractedPayload), /valid-user-token/);
+
+  const queryDocument = (body, token = 'valid-user-token') => fetch(`${baseUrl}/api/document/query`, {
+    method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify(body)
   });
+  const outline = await queryDocument({ doc: extractedPayload.doc, action: 'outline' });
+  assert.equal(outline.status, 200);
+  assert.match((await outline.json()).result, /prueba\.txt/);
+  const searched = await queryDocument({ doc: extractedPayload.doc, action: 'search', query: 'adjunto' });
+  assert.match((await searched.json()).result, /línea 1: Texto adjunto de prueba/);
+  // Otra clave no puede leer el documento de un usuario distinto, aunque acierte el ID.
+  const crossKey = await queryDocument({ doc: extractedPayload.doc, action: 'outline' }, 'other-user-token');
+  assert.equal(crossKey.status, 404);
+  const unknownAction = await queryDocument({ doc: extractedPayload.doc, action: 'ejecutar_shell' });
+  assert.match((await unknownAction.json()).result, /Acción no admitida/);
+
+  // Ruta usada cuando el modelo no admite herramientas: devuelve el texto
+  // completo, sólo a la clave dueña del documento.
+  const fullText = await fetch(`${baseUrl}/api/document/text`, {
+    method: 'POST',
+    headers: { authorization: 'Bearer valid-user-token', 'content-type': 'application/json' },
+    body: JSON.stringify({ doc: extractedPayload.doc })
+  });
+  assert.equal(fullText.status, 200);
+  const fullPayload = await fullText.json();
+  assert.equal(fullPayload.text, 'Texto adjunto de prueba');
+  assert.equal(fullPayload.truncated, false);
+  const foreignText = await fetch(`${baseUrl}/api/document/text`, {
+    method: 'POST',
+    headers: { authorization: 'Bearer other-user-token', 'content-type': 'application/json' },
+    body: JSON.stringify({ doc: extractedPayload.doc })
+  });
+  assert.equal(foreignText.status, 404);
 });

@@ -5,8 +5,14 @@ import test from 'node:test';
 
 const source = await fs.readFile(new URL('../chat-public/chat.js', import.meta.url), 'utf8');
 // Run the actual pure stream helpers without booting the browser-only UI.
-const context = vm.createContext({ TextDecoder });
+const context = vm.createContext({
+  TextDecoder,
+  window: { marked: { setOptions() {} } },
+  localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+  sessionStorage: { getItem: () => null, setItem() {}, removeItem() {} }
+});
 for (const [start, end] of [
+  ['const STORAGE_KEY', 'async function loadConversations('],
   ['function estimateTokens(', 'function estimateContextInputTokens('],
   ['function consumeSse(', 'function webGroundingInstruction(']
 ]) vm.runInContext(source.slice(source.indexOf(start), source.indexOf(end)), context);
@@ -49,6 +55,20 @@ test('los errores de investigación se propagan y cancelan el lector', async () 
   await assert.rejects(context.readSse({ body: stream }, () => { throw new Error('Sin fuentes'); }), /Sin fuentes/);
   assert.equal(cancelled, true);
   assert.equal(stream.locked, false);
+});
+
+test('al cargar el historial se descartan las respuestas huérfanas y se conserva el modelo de cada una', () => {
+  const conversation = context.normalizeConversation({
+    id: 'conv-1', title: 'Chat', model: 'modelo-a', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+    messages: [
+      { role: 'user', content: 'Pregunta' },
+      { role: 'assistant', content: 'Respuesta terminada', model: 'modelo-a' },
+      { role: 'assistant', content: 'Texto parcial', pending: true, thinking: 'a medias' }
+    ]
+  });
+  assert.deepEqual(conversation.messages.map((message) => message.role), ['user', 'assistant']);
+  assert.equal(conversation.messages.some((message) => message.pending), false);
+  assert.equal(conversation.messages[1].model, 'modelo-a');
 });
 
 test('el worker usa las librerías locales para Markdown y sintaxis sin ejecutar el HTML generado', async () => {

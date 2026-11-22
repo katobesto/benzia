@@ -78,6 +78,22 @@ test('anota modelos locales y externos por su ID público o original', () => {
   assert.deepEqual(annotateModels([local, untouched], capabilities).map((model) => model.id), ['modelo-local', 'sin-declarar']);
 });
 
+test('admite y publica los protocolos declarados por el proveedor', () => {
+  const capabilities = sanitizeModelCapabilities({
+    'gateway-sin-responses': { protocols: ['chat_completions'] },
+    'ambos-protocolos': { protocols: ['responses', 'chat_completions'] }
+  });
+  assert.deepEqual(capabilities['gateway-sin-responses'].protocols, ['chat_completions']);
+  assert.deepEqual(
+    annotateModel({ id: 'gateway-sin-responses', object: 'model' }, capabilities).benzIA_protocols,
+    ['chat_completions']
+  );
+  // Un modelo sin protocolos declarados no se anota con ese campo.
+  assert.equal(annotateModel({ id: 'sin-declarar', object: 'model' }, capabilities).benzIA_protocols, undefined);
+  assert.throws(() => sanitizeModelCapabilities({ 'malo': { protocols: ['shell'] } }), /protocolo no válido/);
+  assert.throws(() => sanitizeModelCapabilities({ 'malo': { protocols: [] } }), /lista no vacía/);
+});
+
 test('el gateway publica las modalidades declaradas en /v1/models', async (t) => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'benzia-gateway-caps-'));
   t.after(async () => {
