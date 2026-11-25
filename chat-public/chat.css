@@ -449,6 +449,18 @@ button, select { touch-action: manipulation; }
   .preview-note { display: none; }
 }
 
+/* El control de esfuerzo (etiqueta + desplegable + tick de pensamiento) mide
+   ~238 px y, sumado a las herramientas y al botón Enviar, no cabe por debajo de
+   ~410 px: el botón quedaba fuera de pantalla. Se compacta el texto desde ese
+   punto. Los nombres siguen disponibles para lectores de pantalla por
+   aria-label y el detalle queda en el title. */
+@media (max-width: 430px) {
+  .reasoning-effort-control { max-width: 132px; gap: 3px; padding: 0 5px 0 7px; }
+  .reasoning-effort-control .effort-label > span { display: none; }
+  .reasoning-effort-control .thinking-toggle > span { display: none; }
+  .reasoning-effort-control .thinking-toggle { padding-left: 5px; }
+}
+
 @media (max-width: 370px) {
   .chat-header { padding-right: 4px; padding-left: 4px; }
   .icon-button { width: 40px; flex-basis: 40px; }
